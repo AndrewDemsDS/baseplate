@@ -1,0 +1,7 @@
+.env
+*.env.local
+data/
+volumes/
+acme.json
+*.log
+.DS_Store

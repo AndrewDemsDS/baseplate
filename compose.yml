@@ -1,0 +1,218 @@
+# ─── baseplate ─────────────────────────────────────────────────────────────────
+# Opinionated self-hosted stack for a single host (Pi 5, mini-PC, VPS).
+# Optional services live behind compose `profiles:` — enable with
+#   docker compose --profile nextcloud --profile vaultwarden up -d
+
+name: baseplate
+
+networks:
+  proxy:
+    name: proxy
+  internal:
+    name: baseplate_internal
+    internal: true
+
+volumes:
+  traefik_acme:
+  nextcloud_data:
+  nextcloud_db:
+  vaultwarden_data:
+  paperless_data:
+  paperless_media:
+  paperless_db:
+  mosquitto_data:
+  wireguard_config:
+
+services:
+
+  # ── Reverse proxy + automatic Let's Encrypt via Cloudflare DNS-01 ────────────
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    networks: [proxy]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CF_DNS_API_TOKEN: "${CF_DNS_API_TOKEN}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - traefik_acme:/etc/traefik/acme
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.dashboard.rule: "Host(`traefik.${DOMAIN}`)"
+      traefik.http.routers.dashboard.entrypoints: "websecure"
+      traefik.http.routers.dashboard.tls.certresolver: "cloudflare"
+      traefik.http.routers.dashboard.service: "api@internal"
+      traefik.http.routers.dashboard.middlewares: "local-only@docker"
+      traefik.http.middlewares.local-only.ipallowlist.sourcerange: "127.0.0.1/32,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+
+  # ── Outbound-only tunnel to Cloudflare (no router port-forwarding needed) ───
+  # Public Hostnames are configured in the Zero Trust dashboard, not here.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    networks: [proxy, internal]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+
+  # ── Auto-update running containers nightly ──────────────────────────────────
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --schedule "0 0 4 * * *" --cleanup
+
+  # ── Optional: classic DDNS A-record updates ─────────────────────────────────
+  ddns:
+    image: oznu/cloudflare-ddns:latest
+    container_name: ddns
+    restart: unless-stopped
+    profiles: ["ddns"]
+    environment:
+      API_KEY: "${DDNS_API_KEY}"
+      ZONE: "${DOMAIN}"
+      SUBDOMAIN: "${DDNS_SUBDOMAIN}"
+      PROXIED: "true"
+      INTERVAL: "200"
+
+  # ─── Apps (opt-in via profiles) ──────────────────────────────────────────────
+
+  nextcloud:
+    image: nextcloud:latest
+    container_name: nextcloud
+    restart: unless-stopped
+    profiles: ["nextcloud"]
+    networks: [proxy, internal]
+    depends_on: [nextcloud_db]
+    volumes:
+      - nextcloud_data:/var/www/html
+    environment:
+      MYSQL_HOST: nextcloud_db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+      OVERWRITEPROTOCOL: https
+      TRUSTED_PROXIES: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.nextcloud.rule: "Host(`cloud.${DOMAIN}`)"
+      traefik.http.routers.nextcloud.entrypoints: "websecure"
+      traefik.http.routers.nextcloud.tls.certresolver: "cloudflare"
+      traefik.http.services.nextcloud.loadbalancer.server.port: "80"
+
+  nextcloud_db:
+    image: mariadb:10.11
+    container_name: nextcloud_db
+    restart: unless-stopped
+    profiles: ["nextcloud"]
+    networks: [internal]
+    volumes:
+      - nextcloud_db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "${NEXTCLOUD_DB_ROOT_PASSWORD}"
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    profiles: ["vaultwarden"]
+    networks: [proxy]
+    volumes:
+      - vaultwarden_data:/data
+    environment:
+      DOMAIN: "https://vault.${DOMAIN}"
+      WEBSOCKET_ENABLED: "true"
+      ADMIN_TOKEN: "${VAULTWARDEN_ADMIN_TOKEN}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vaultwarden.rule: "Host(`vault.${DOMAIN}`)"
+      traefik.http.routers.vaultwarden.entrypoints: "websecure"
+      traefik.http.routers.vaultwarden.tls.certresolver: "cloudflare"
+      traefik.http.services.vaultwarden.loadbalancer.server.port: "80"
+
+  paperless_db:
+    image: postgres:17
+    container_name: paperless_db
+    restart: unless-stopped
+    profiles: ["paperless"]
+    networks: [internal]
+    volumes:
+      - paperless_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: "${PAPERLESS_DB_PASSWORD}"
+
+  paperless_redis:
+    image: redis:7
+    container_name: paperless_redis
+    restart: unless-stopped
+    profiles: ["paperless"]
+    networks: [internal]
+
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    restart: unless-stopped
+    profiles: ["paperless"]
+    networks: [proxy, internal]
+    depends_on: [paperless_db, paperless_redis]
+    volumes:
+      - paperless_data:/usr/src/paperless/data
+      - paperless_media:/usr/src/paperless/media
+    environment:
+      PAPERLESS_URL: "https://paperless.${DOMAIN}"
+      PAPERLESS_SECRET_KEY: "${PAPERLESS_SECRET_KEY}"
+      PAPERLESS_REDIS: "redis://paperless_redis:6379"
+      PAPERLESS_DBHOST: paperless_db
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: "${PAPERLESS_DB_PASSWORD}"
+      PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER}"
+      PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.paperless.rule: "Host(`paperless.${DOMAIN}`)"
+      traefik.http.routers.paperless.entrypoints: "websecure"
+      traefik.http.routers.paperless.tls.certresolver: "cloudflare"
+      traefik.http.services.paperless.loadbalancer.server.port: "8000"
+
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    profiles: ["mqtt"]
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard
+    restart: unless-stopped
+    profiles: ["wireguard"]
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - wireguard_config:/config
+      - /lib/modules:/lib/modules
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      SERVERURL: "${WG_SERVER_HOSTNAME}"
+      SERVERPORT: "51820"
+      PEERS: "${WG_PEERS}"
+      PEERDNS: "auto"
+      INTERNAL_SUBNET: "10.13.13.0"
+      ALLOWEDIPS: "0.0.0.0/0"
