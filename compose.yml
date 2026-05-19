@@ -22,6 +22,8 @@ volumes:
   paperless_db:
   mosquitto_data:
   wireguard_config:
+  jellyfin_config:
+  jellyfin_cache:
 
 services:
 
@@ -209,6 +211,32 @@ services:
       - /run/dbus:/run/dbus:ro
     environment:
       TZ: "${TZ:-UTC}"
+
+  # Jellyfin media server. Bridge networking with Traefik in front is the
+  # simplest setup; if you want DLNA discovery on your LAN, switch to
+  # network_mode: host and drop the Traefik labels.
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    profiles: ["media"]
+    networks: [proxy]
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
+      - ${MEDIA_DIR:-./media}:/media:ro
+    # Uncomment to enable hardware transcoding on a Raspberry Pi 5
+    # (V4L2 M2M). Optional on x86 — use /dev/dri instead for VAAPI.
+    # devices:
+    #   - /dev/video10:/dev/video10
+    #   - /dev/video11:/dev/video11
+    #   - /dev/video12:/dev/video12
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.jellyfin.rule: "Host(`media.${DOMAIN}`)"
+      traefik.http.routers.jellyfin.entrypoints: "websecure"
+      traefik.http.routers.jellyfin.tls.certresolver: "cloudflare"
+      traefik.http.services.jellyfin.loadbalancer.server.port: "8096"
 
   mosquitto:
     image: eclipse-mosquitto:latest
