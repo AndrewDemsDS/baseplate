@@ -126,13 +126,13 @@ If you bring up `nextcloud_db` once and later change `MYSQL_PASSWORD` in your `.
 
 ### 7. Home Assistant runs in host network mode
 
-The `assistant` profile uses `network_mode: host`, which means Home Assistant shares the host's network stack: it can do mDNS/SSDP discovery, talk to HomeKit and Matter, and reach any device on your LAN without bridge-network NAT.
+The `assistant` profile uses `network_mode: host`. Home Assistant shares the host's network stack so mDNS/SSDP, HomeKit and Matter discover devices on your LAN without bridge-network NAT in the way.
 
-Trade-off: it sits outside the `proxy` network, so Traefik can't reverse-proxy it via Docker labels. Reach it on `http://<host-ip>:8123` directly, or add a Public Hostname in the Cloudflare Tunnel dashboard pointing at `http://host.docker.internal:8123` (on Linux you may need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `cloudflared` service).
+That also puts HA outside the `proxy` network, so Traefik can't reverse-proxy it via Docker labels. Reach HA at `http://<host-ip>:8123`, or point a Cloudflare Tunnel Public Hostname at `http://host.docker.internal:8123` (on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `cloudflared` service for that name to resolve).
 
 ### 8. Nextcloud needs Redis config in `config.php` too
 
-Setting `REDIS_HOST` as an env var on the Nextcloud container is not enough on its own. After first start, edit `config/config.php` inside the container and add the `memcache.local`, `memcache.locking`, and `redis` entries. Otherwise Nextcloud will keep using file locking and you'll see "Transactional file locking is disabled" warnings in admin overview.
+The `REDIS_HOST` env var alone won't activate Redis. After Nextcloud's first start, edit `config/config.php` inside the container and add the `memcache.local`, `memcache.locking`, and `redis` entries. Skip this step and Nextcloud falls back to file locking. You'll see "Transactional file locking is disabled" in the admin overview.
 
 ### 9. Don't reuse passwords across services
 
