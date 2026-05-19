@@ -11,9 +11,10 @@ Tested on a Raspberry Pi 5 running Debian 13. Works on any Docker host (mini-PC,
 | **Traefik v3** | Reverse proxy, automatic Let's Encrypt certs via Cloudflare DNS-01 |
 | **Cloudflare Tunnel** | Outbound-only connection to Cloudflare's edge. Your services on the internet without exposing any router ports. |
 | **Watchtower** | Nightly image updates with cleanup |
-| **Nextcloud** *(opt-in)* | Files + calendar + contacts + Office collab |
+| **Nextcloud** *(opt-in)* | Files + calendar + contacts + Office collab. Includes a Redis cache for file locking and session storage. |
 | **Vaultwarden** *(opt-in)* | Bitwarden-compatible password manager |
 | **Paperless-ngx** *(opt-in)* | Searchable document archive |
+| **Home Assistant** *(opt-in)* | Smart-home hub. Runs in host network mode for full LAN device discovery. |
 | **Mosquitto** *(opt-in)* | MQTT broker for home automation |
 | **WireGuard** *(opt-in)* | VPN back into your LAN |
 | **Cloudflare DDNS** *(opt-in)* | Classic A-record updates, if you want a direct-IP path alongside the tunnel |
@@ -36,6 +37,8 @@ cp .env.example .env
 $EDITOR .env                          # fill in values
 docker compose --profile nextcloud --profile vaultwarden up -d
 ```
+
+Available profiles: `nextcloud`, `vaultwarden`, `paperless`, `assistant`, `mqtt`, `wireguard`, `ddns`. Combine the ones you want.
 
 Add Public Hostnames in the Cloudflare Zero Trust dashboard:
 
@@ -121,7 +124,17 @@ Paste the resulting `$argon2id$v=19$...` string as the `ADMIN_TOKEN` value.
 
 If you bring up `nextcloud_db` once and later change `MYSQL_PASSWORD` in your `.env`, the container won't notice. Its volume already has the user with the old password baked in. You have to `ALTER USER` from inside the running container, then update Nextcloud's `config.php` to match. Set strong distinct passwords from the start.
 
-### 7. Don't reuse passwords across services
+### 7. Home Assistant runs in host network mode
+
+The `assistant` profile uses `network_mode: host`, which means Home Assistant shares the host's network stack: it can do mDNS/SSDP discovery, talk to HomeKit and Matter, and reach any device on your LAN without bridge-network NAT.
+
+Trade-off: it sits outside the `proxy` network, so Traefik can't reverse-proxy it via Docker labels. Reach it on `http://<host-ip>:8123` directly, or add a Public Hostname in the Cloudflare Tunnel dashboard pointing at `http://host.docker.internal:8123` (on Linux you may need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `cloudflared` service).
+
+### 8. Nextcloud needs Redis config in `config.php` too
+
+Setting `REDIS_HOST` as an env var on the Nextcloud container is not enough on its own. After first start, edit `config/config.php` inside the container and add the `memcache.local`, `memcache.locking`, and `redis` entries. Otherwise Nextcloud will keep using file locking and you'll see "Transactional file locking is disabled" warnings in admin overview.
+
+### 9. Don't reuse passwords across services
 
 Yes, even on a homelab. If one container is exploited and your DB credentials are reused as your Vaultwarden admin token... you don't want that.
 

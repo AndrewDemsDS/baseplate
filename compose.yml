@@ -89,7 +89,7 @@ services:
     restart: unless-stopped
     profiles: ["nextcloud"]
     networks: [proxy, internal]
-    depends_on: [nextcloud_db]
+    depends_on: [nextcloud_db, nextcloud_redis]
     volumes:
       - nextcloud_data:/var/www/html
     environment:
@@ -97,6 +97,7 @@ services:
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
       MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+      REDIS_HOST: nextcloud_redis
       OVERWRITEPROTOCOL: https
       TRUSTED_PROXIES: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
     labels:
@@ -119,6 +120,13 @@ services:
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
       MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+
+  nextcloud_redis:
+    image: redis:alpine
+    container_name: nextcloud_redis
+    restart: unless-stopped
+    profiles: ["nextcloud"]
+    networks: [internal]
 
   vaultwarden:
     image: vaultwarden/server:latest
@@ -184,6 +192,23 @@ services:
       traefik.http.routers.paperless.entrypoints: "websecure"
       traefik.http.routers.paperless.tls.certresolver: "cloudflare"
       traefik.http.services.paperless.loadbalancer.server.port: "8000"
+
+  # Home Assistant. Host networking is the HA-recommended mode: it lets
+  # mDNS/SSDP, HomeKit, Matter and most integrations discover devices on
+  # your LAN. Reach it on http://<host>:8123 directly.
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    profiles: ["assistant"]
+    network_mode: host
+    privileged: true
+    volumes:
+      - ${HASS_CONFIG_DIR:-./hassio/config}:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      TZ: "${TZ:-UTC}"
 
   mosquitto:
     image: eclipse-mosquitto:latest
