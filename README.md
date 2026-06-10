@@ -10,7 +10,7 @@ Tested on a Raspberry Pi 5 running Debian 13. Works on any Docker host (mini-PC,
 | --- | --- |
 | **Traefik v3** | Reverse proxy, automatic Let's Encrypt certs via Cloudflare DNS-01 |
 | **Cloudflare Tunnel** | Outbound-only connection to Cloudflare's edge. Your services on the internet without exposing any router ports. |
-| **Watchtower** | Nightly image updates, through a least-privilege socket-proxy (no raw root socket). Stateful apps are excluded — pin those yourself. |
+| **Watchtower** | Nightly image updates via a least-privilege socket-proxy (no raw root socket). It skips stateful apps, so you pin those yourself. |
 | **Nextcloud** *(opt-in)* | Files + calendar + contacts + Office collab. Includes a Redis cache for file locking and session storage. |
 | **Vaultwarden** *(opt-in)* | Bitwarden-compatible password manager |
 | **Paperless-ngx** *(opt-in)* | Searchable document archive |
@@ -79,7 +79,7 @@ Three networks:
 
 - `proxy`: services that need to be reachable by Traefik or by the Tunnel.
 - `baseplate_internal`: databases and other backends. `internal: true` means no host bridge, no internet, just service-to-service traffic on the host.
-- `baseplate_socketproxy`: internal-only, carries just Watchtower ↔ socket-proxy traffic so Watchtower never touches the raw Docker socket.
+- `baseplate_socketproxy`: internal-only. Carries Watchtower ↔ socket-proxy traffic so Watchtower never touches the raw Docker socket.
 
 ## Gotchas worth knowing
 
@@ -129,7 +129,7 @@ If you bring up `nextcloud_db` once and later change `MYSQL_PASSWORD` in your `.
 
 The `assistant` profile uses `network_mode: host`. Home Assistant shares the host's network stack so mDNS/SSDP, HomeKit and Matter discover devices on your LAN without bridge-network NAT in the way.
 
-`privileged` is **off** by default — HA doesn't need it for network/MQTT integrations. Uncomment it (and add the relevant `devices:`) only if you pass through a USB/Zigbee/Bluetooth dongle.
+`privileged` is **off** by default. HA doesn't need it for network/MQTT integrations. Uncomment it, and add the relevant `devices:`, only if you pass through a USB/Zigbee/Bluetooth dongle.
 
 That also puts HA outside the `proxy` network, so Traefik can't reverse-proxy it via Docker labels. Reach HA at `http://<host-ip>:8123`, or point a Cloudflare Tunnel Public Hostname at `http://host.docker.internal:8123` (on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `cloudflared` service for that name to resolve).
 
@@ -143,9 +143,9 @@ Yes, even on a homelab. If one container is exploited and your DB credentials ar
 
 ## Security defaults
 
-`baseplate` ships hardened out of the box:
+`baseplate` ships with these defaults:
 
-- **No raw Docker socket for Watchtower.** It reaches the Docker API through a [`socket-proxy`](https://github.com/linuxserver/docker-socket-proxy) on an internal-only network, exposing only the container/image endpoints it needs — not the root-equivalent `/var/run/docker.sock`.
+- **No raw Docker socket for Watchtower.** It reaches the Docker API through a [`socket-proxy`](https://github.com/linuxserver/docker-socket-proxy) on an internal-only network, exposing only the container/image endpoints it needs, not the root-equivalent `/var/run/docker.sock`.
 - **`no-new-privileges`** on every app container, so a compromised process can't escalate via setuid binaries.
 - **Stateful apps excluded from auto-update.** Watchtower won't auto-bump `nextcloud`, `vaultwarden`, `paperless` or the databases (Nextcloud can't skip major versions). Pin those to explicit image tags and update them on purpose.
 - **Security headers** (HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`) on every Traefik route via the shared `sec-headers` middleware.

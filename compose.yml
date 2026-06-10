@@ -95,8 +95,8 @@ services:
       - VERSION=1
 
   # ── Auto-update running containers nightly (via the socket-proxy) ────────────
-  # Stateful apps are excluded so they're never silently major-bumped (Nextcloud
-  # in particular refuses to skip majors). Pin those to explicit tags yourself.
+  # Stateful apps are excluded so Watchtower never bumps them to a new major
+  # (Nextcloud refuses to skip majors). Pin those to explicit tags yourself.
   watchtower:
     image: containrrr/watchtower:latest
     container_name: watchtower
