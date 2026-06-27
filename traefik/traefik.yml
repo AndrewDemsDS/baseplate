@@ -1,3 +1,8 @@
+# Traefik static config.
+# TLS is a single *.${DOMAIN} wildcard from acme.sh, served as the default
+# certificate (see dynamic.yml tls.stores). Traefik has no ACME resolver of its
+# own and no Docker provider — routes come from the file provider only.
+
 api:
   dashboard: true
   insecure: false
@@ -12,22 +17,8 @@ entryPoints:
           scheme: https
   websecure:
     address: ":443"
-    http:
-      tls:
-        certResolver: cloudflare
-
-certificatesResolvers:
-  cloudflare:
-    acme:
-      email: "${ACME_EMAIL}"
-      storage: /acme.json
-      dnsChallenge:
-        provider: cloudflare
-        resolvers:
-          - "1.1.1.1:53"
-          - "8.8.8.8:53"
 
 providers:
-  docker:
-    exposedByDefault: false
-    network: proxy
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true

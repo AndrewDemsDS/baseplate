@@ -1,0 +1,65 @@
+# monitoring — host/container metrics (Beszel) and image CVE scanning (Trivy).
+# A whole observability stack in three small containers.
+
+networks:
+  proxy:
+    name: proxy
+
+volumes:
+  beszel_data:
+  trivy_cache:
+
+services:
+
+  # Beszel hub: dashboards and history. Route it in dynamic.yml. The agent
+  # connects over SSH using BESZEL_KEY (the hub's public key — see README).
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["monitoring"]
+    networks: [proxy]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - beszel_data:/beszel_data
+    cpus: 0.25
+    mem_limit: 256m
+
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: beszel-agent
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["monitoring"]
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      LISTEN: "45876"
+      KEY: "${BESZEL_KEY}"
+    cpus: 0.15
+    mem_limit: 128m
+
+  # Weekly Trivy scan of every image tag in this stack. Emails HIGH/CRITICAL
+  # findings via Resend. It reads image tags from the mounted compose files and
+  # pulls each from its registry — no Docker socket needed.
+  vuln-scanner:
+    image: aquasec/trivy:latest
+    container_name: vuln-scanner
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["monitoring"]
+    networks: [proxy]
+    entrypoint: ["/bin/sh", "/scan/vuln-scan.sh"]
+    environment:
+      RESEND_API_KEY: "${RESEND_API_KEY:-}"
+      ALERT_FROM: "${ALERT_EMAIL:-you@example.com}"
+      ALERT_EMAIL: "${ALERT_EMAIL:-you@example.com}"
+      SCAN_INTERVAL: "${VULN_SCAN_INTERVAL:-604800}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - .:/stack:ro
+      - ./scripts:/scan:ro
+      - trivy_cache:/root/.cache
+    mem_limit: 1g

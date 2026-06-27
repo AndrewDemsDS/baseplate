@@ -1,0 +1,155 @@
+# core — reverse proxy, TLS, Docker-API proxy, auto-updates.
+# These run by default (no profile). Remote-access services are opt-in.
+
+networks:
+  proxy:
+    name: proxy
+  # Watchtower reaches the Docker API only through the socket-proxy here.
+  socketproxy:
+    name: baseplate_socketproxy
+    internal: true
+
+volumes:
+  acme_sh:
+  traefik_certs:
+  wireguard_config:
+
+services:
+
+  # Renders traefik/dynamic.yml from the .template, substituting ${DOMAIN}.
+  # Traefik's file provider does not expand env vars, so this runs first and
+  # exits. The rendered dynamic.yml is gitignored.
+  config-render:
+    image: alpine:3
+    container_name: config-render
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DOMAIN: "${DOMAIN:?set DOMAIN in .env}"
+    volumes:
+      - ./traefik:/work
+    command: >
+      sh -c "apk add --no-cache gettext >/dev/null 2>&1 &&
+             envsubst '$$DOMAIN' < /work/dynamic.yml.template > /work/dynamic.yml &&
+             echo rendered /work/dynamic.yml"
+
+  # Reverse proxy. Routes come from the file provider (traefik/dynamic.yml);
+  # there is no Docker label provider and no docker.sock mount.
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      config-render:
+        condition: service_completed_successfully
+    networks: [proxy]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik_certs:/etc/traefik/certs:ro
+
+  # Issues and renews a single *.${DOMAIN} wildcard cert over Cloudflare DNS-01.
+  # Traefik serves it as the default certificate (see dynamic.yml tls.stores).
+  acme:
+    image: neilpang/acme.sh
+    container_name: acme
+    restart: unless-stopped
+    command: daemon
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      CF_Token: "${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN in .env}"
+    volumes:
+      - acme_sh:/acme.sh
+      - traefik_certs:/certs
+    # First run issues the cert and installs it to /certs as wildcard.crt/key.
+    # See README "TLS" for the one-time issue command.
+
+  # Least-privilege Docker API proxy. Watchtower talks to this, never the raw
+  # root socket. Read-only socket mount, internal-only network.
+  socket-proxy:
+    image: lscr.io/linuxserver/socket-proxy:latest
+    container_name: socket-proxy
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [socketproxy]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - POST=1
+      - PING=1
+      - VERSION=1
+
+  # Nightly container updates through the socket-proxy. Stateful apps are
+  # excluded so a major bump never lands unattended (Nextcloud cannot skip
+  # majors). Pin those tags and update them on purpose.
+  watchtower:
+    image: nickfedor/watchtower:latest
+    container_name: watchtower
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks: [socketproxy]
+    depends_on: [socket-proxy]
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
+    command: >
+      --schedule "0 0 4 * * *" --cleanup
+      --disable-containers nextcloud nextcloud_db vaultwarden gitea paperless paperless_db
+
+  # ── Remote access (opt-in) ──────────────────────────────────────────────────
+
+  # Cloudflare Tunnel: outbound-only, no port-forwarding. Public Hostnames are
+  # set in the Zero Trust dashboard and point at http://traefik:80.
+  #   docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["tunnel"]
+    networks: [proxy]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+
+  # WireGuard: a VPN back into the LAN. Reach every service by its LAN name
+  # once connected, no public exposure.
+  #   docker compose --profile wireguard up -d
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["wireguard"]
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - wireguard_config:/config
+      - /lib/modules:/lib/modules
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      SERVERURL: "${WG_SERVER_HOSTNAME:-auto}"
+      SERVERPORT: "51820"
+      PEERS: "${WG_PEERS:-3}"
+      PEERDNS: "auto"
+      INTERNAL_SUBNET: "10.13.13.0"
+      ALLOWEDIPS: "0.0.0.0/0"
+
+  # Classic DDNS A-record updates, for a direct-IP setup without the tunnel.
+  #   docker compose --profile ddns up -d
+  cloudflare-ddns:
+    image: oznu/cloudflare-ddns:latest
+    container_name: cloudflare-ddns
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["ddns"]
+    environment:
+      API_KEY: "${DDNS_API_KEY}"
+      ZONE: "${DOMAIN}"
+      SUBDOMAIN: "${DDNS_SUBDOMAIN}"
+      PROXIED: "false"
+      INTERVAL: "300"

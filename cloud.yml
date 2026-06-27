@@ -1,0 +1,168 @@
+# cloud — files, secrets, git, dashboard, status.
+# Routes for these live in traefik/dynamic.yml.template (LAN-only by default).
+
+networks:
+  proxy:
+    name: proxy
+  internal:
+    name: baseplate_internal
+    internal: true
+
+volumes:
+  nextcloud_data:
+  nextcloud_db:
+  vaultwarden_data:
+  gitea_data:
+  homarr_config:
+  uptime_kuma_data:
+  paperless_data:
+  paperless_media:
+  paperless_db:
+
+services:
+
+  nextcloud:
+    image: nextcloud:apache
+    container_name: nextcloud
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["nextcloud"]
+    networks: [proxy, internal]
+    depends_on: [nextcloud_db, nextcloud_redis]
+    cpus: 2.0
+    volumes:
+      - nextcloud_data:/var/www/html
+    environment:
+      MYSQL_HOST: nextcloud_db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+      REDIS_HOST: nextcloud_redis
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: "https://cloud.${DOMAIN}"
+      TRUSTED_PROXIES: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+
+  nextcloud_db:
+    image: mariadb:10.11
+    container_name: nextcloud_db
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["nextcloud"]
+    networks: [internal]
+    volumes:
+      - nextcloud_db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: "${NEXTCLOUD_DB_ROOT_PASSWORD}"
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+
+  nextcloud_redis:
+    image: redis:alpine
+    container_name: nextcloud_redis
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["nextcloud"]
+    networks: [internal]
+
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["vaultwarden"]
+    networks: [proxy]
+    volumes:
+      - vaultwarden_data:/data
+    environment:
+      DOMAIN: "https://vault.${DOMAIN}"
+      # Argon2-hash the admin token (see README). Empty disables the admin page.
+      ADMIN_TOKEN: "${VAULTWARDEN_ADMIN_TOKEN}"
+
+  gitea:
+    image: gitea/gitea:1
+    container_name: gitea
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["gitea"]
+    networks: [proxy, internal]
+    volumes:
+      - gitea_data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "2222:22"   # git over SSH
+    environment:
+      USER_UID: "${PUID:-1000}"
+      USER_GID: "${PGID:-1000}"
+      GITEA__server__ROOT_URL: "https://git.${DOMAIN}/"
+      GITEA__server__DOMAIN: "git.${DOMAIN}"
+      GITEA__server__SSH_DOMAIN: "git.${DOMAIN}"
+      GITEA__server__SSH_PORT: "2222"
+
+  homarr:
+    image: ghcr.io/homarr-labs/homarr:latest
+    container_name: homarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["homarr"]
+    networks: [proxy]
+    volumes:
+      - homarr_config:/appdata
+    environment:
+      SECRET_ENCRYPTION_KEY: "${HOMARR_SECRET_KEY}"
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["kuma"]
+    networks: [proxy]
+    volumes:
+      - uptime_kuma_data:/app/data
+
+  # ── Paperless-ngx (opt-in) ──────────────────────────────────────────────────
+
+  paperless_db:
+    image: postgres:17
+    container_name: paperless_db
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["paperless"]
+    networks: [internal]
+    volumes:
+      - paperless_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: "${PAPERLESS_DB_PASSWORD}"
+
+  paperless_redis:
+    image: redis:7
+    container_name: paperless_redis
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["paperless"]
+    networks: [internal]
+
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["paperless"]
+    networks: [proxy, internal]
+    depends_on: [paperless_db, paperless_redis]
+    volumes:
+      - paperless_data:/usr/src/paperless/data
+      - paperless_media:/usr/src/paperless/media
+    environment:
+      PAPERLESS_URL: "https://paperless.${DOMAIN}"
+      PAPERLESS_SECRET_KEY: "${PAPERLESS_SECRET_KEY}"
+      PAPERLESS_REDIS: "redis://paperless_redis:6379"
+      PAPERLESS_DBHOST: paperless_db
+      PAPERLESS_DBUSER: paperless
+      PAPERLESS_DBPASS: "${PAPERLESS_DB_PASSWORD}"
+      PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
+      PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"

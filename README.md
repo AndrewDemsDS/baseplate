@@ -1,190 +1,144 @@
 # baseplate
 
-An opinionated, single-host self-hosted stack. Drop a `.env`, pick the services you want with compose `profiles`, and you have a Traefik-fronted homelab reachable from anywhere via a Cloudflare Tunnel. No port forwarding. No public IP. No Dynamic DNS.
+A single-host self-hosting stack you can clone and run. Docker Compose, split by
+role, with opt-in profiles. Traefik terminates TLS with one wildcard certificate;
+everything is LAN-only by default, and remote access is a profile you turn on.
 
-Tested on a Raspberry Pi 5 running Debian 13. Works on any Docker host (mini-PC, NAS, VPS).
+Tested on a Raspberry Pi 5 (Debian 13) and an x86 mini-PC/NAS. Any Docker host works.
 
 ## What you get
 
-| Service | Why it's here |
-| --- | --- |
-| **Traefik v3** | Reverse proxy, automatic Let's Encrypt certs via Cloudflare DNS-01 |
-| **Cloudflare Tunnel** | Outbound-only connection to Cloudflare's edge. Your services on the internet without exposing any router ports. |
-| **Watchtower** | Nightly image updates via a least-privilege socket-proxy (no raw root socket). It skips stateful apps, so you pin those yourself. |
-| **Nextcloud** *(opt-in)* | Files + calendar + contacts + Office collab. Includes a Redis cache for file locking and session storage. |
-| **Vaultwarden** *(opt-in)* | Bitwarden-compatible password manager |
-| **Paperless-ngx** *(opt-in)* | Searchable document archive |
-| **Home Assistant** *(opt-in)* | Smart-home hub. Runs in host network mode for full LAN device discovery. |
-| **Mosquitto** *(opt-in)* | MQTT broker for home automation |
-| **WireGuard** *(opt-in)* | VPN back into your LAN |
-| **Cloudflare DDNS** *(opt-in)* | Classic A-record updates, if you want a direct-IP path alongside the tunnel |
+| Service | Profile | Purpose |
+|---------|---------|---------|
+| Traefik | (default) | Reverse proxy, file-provider routing, wildcard TLS |
+| acme.sh | (default) | Issues/renews `*.${DOMAIN}` over Cloudflare DNS-01 |
+| socket-proxy + Watchtower | (default) | Nightly updates without the raw Docker socket |
+| Nextcloud (+ MariaDB, Redis) | `nextcloud` | Files, calendar, contacts |
+| Vaultwarden | `vaultwarden` | Bitwarden-compatible password manager |
+| Gitea | `gitea` | Self-hosted git |
+| Homarr | `homarr` | Start-page dashboard |
+| Uptime Kuma | `kuma` | Status/uptime monitoring |
+| Paperless-ngx (+ Postgres, Redis) | `paperless` | Document archive |
+| Jellyfin + Sonarr/Radarr/Prowlarr/Bazarr/Tdarr | `media` | Media server + automation |
+| qBittorrent + Gluetun | `vpn` | Torrent client behind a VPN |
+| Home Assistant | `assistant` | Smart-home hub (host network) |
+| Mosquitto | `mqtt` | MQTT broker (auth required) |
+| Beszel + agent | `monitoring` | Host/container metrics |
+| Trivy vuln-scanner | `monitoring` | Weekly image CVE scan + email |
+| Cloudflare Tunnel | `tunnel` | Public access, no port-forwarding |
+| WireGuard | `wireguard` | VPN back into the LAN |
+| Cloudflare DDNS | `ddns` | Direct-IP A-record updates |
 
-The apps all sit behind compose `profiles:`. You opt in to what you use.
+## How it fits together
 
-## Prerequisites
+- **Routing** comes from a file, `traefik/dynamic.yml`, not Docker labels. You edit
+  `traefik/dynamic.yml.template`; a one-shot `config-render` service substitutes
+  `${DOMAIN}` and writes the live file before Traefik starts.
+- **TLS** is a single `*.${DOMAIN}` wildcard. acme.sh issues it over Cloudflare
+  DNS-01 and drops it in a shared volume; Traefik serves it as the default
+  certificate. No per-host ACME, no Traefik-managed `acme.json`.
+- **Ingress** defaults to LAN-only: every route carries an `ipAllowList` for
+  private ranges. Turn on the `tunnel` or `wireguard` profile to reach it from
+  outside.
+- **Docker access** for Watchtower goes through a read-only socket-proxy on an
+  internal network. Traefik mounts no socket at all.
+- **Hardening**: `no-new-privileges` on every service, internal-only networks for
+  databases, CPU/memory caps on the heavy containers, security headers on every
+  route, and basic auth in front of admin UIs that lack their own login.
 
-- Docker + Compose v2.
-- A domain on Cloudflare (free plan is fine).
-- A **remotely-managed** Cloudflare Tunnel (Zero Trust → Networks → Tunnels → Create → "Cloudflared"). Token-based. Public Hostnames live in the dashboard, not in a local file.
-- A scoped Cloudflare API token: `Zone:DNS:Edit` + `Zone:Zone:Read` on your zone. Used by Traefik for the ACME DNS-01 challenge.
+## Requirements
+
+- A Docker host with Compose v2.
+- A domain on Cloudflare and an API token (Zone Read + DNS Edit, scoped to the zone).
+- Local DNS (or `/etc/hosts`) pointing `*.${DOMAIN}` at the host for LAN-only use.
 
 ## Quick start
 
-```bash
-git clone https://github.com/AndrewDemsDS/baseplate.git
-cd baseplate
+```sh
 cp .env.example .env
-$EDITOR .env                          # fill in values
-docker compose --profile nextcloud --profile vaultwarden up -d
+# set DOMAIN and CF_DNS_API_TOKEN, plus any app secrets you need
+
+# bring up the proxy + a couple of apps
+docker compose --profile nextcloud --profile monitoring up -d
 ```
 
-Available profiles: `nextcloud`, `vaultwarden`, `paperless`, `assistant`, `mqtt`, `wireguard`, `ddns`. Combine the ones you want.
+`config-render` writes `traefik/dynamic.yml` from the template on every `up`.
 
-Add Public Hostnames in the Cloudflare Zero Trust dashboard:
+## TLS: issue the wildcard once
 
-| Hostname | Service URL | Notes |
-| --- | --- | --- |
-| `cloud.example.com` | `http://nextcloud:80` | direct to container |
-| `vault.example.com` | `http://vaultwarden:80` | direct to container |
-| `paperless.example.com` | `http://paperless:8000` | direct to container |
-| `traefik.example.com` | `http://traefik:80` | optional dashboard, IP-allowlisted |
+acme.sh runs as a daemon and renews automatically, but the first issue is manual:
 
-The Tunnel and your containers share the `proxy` Docker network, so the hostnames resolve.
-
-## Architecture
-
-```
-                 ┌─────────────────────────────────────────────────────────┐
-                 │                Cloudflare edge (anycast)                │
-                 └───────────────────────────┬─────────────────────────────┘
-                                             │ outbound-only QUIC
-                                             ▼
-                 ┌────────────── your host ────────────────┐
-                 │   cloudflared ────► proxy network       │
-                 │                       │                 │
-                 │                       ▼                 │
-                 │   traefik (TLS via Cloudflare DNS-01)   │
-                 │                       │                 │
-                 │           ┌───────────┴──────────────┐  │
-                 │           ▼              ▼           ▼  │
-                 │       nextcloud     vaultwarden   paperless  ...
-                 │           │                                 │
-                 │       internal network (no public exposure) │
-                 │           │                                 │
-                 │       nextcloud_db                          │
-                 └─────────────────────────────────────────────┘
+```sh
+docker compose exec acme acme.sh --issue --dns dns_cf -d "${DOMAIN}" -d "*.${DOMAIN}" \
+  --server letsencrypt
+docker compose exec acme acme.sh --install-cert -d "${DOMAIN}" \
+  --key-file /certs/wildcard.key --fullchain-file /certs/wildcard.crt
+docker compose restart traefik
 ```
 
-Three networks:
+Until the cert exists, Traefik serves a self-signed default. Browsers will warn.
 
-- `proxy`: services that need to be reachable by Traefik or by the Tunnel.
-- `baseplate_internal`: databases and other backends. `internal: true` means no host bridge, no internet, just service-to-service traffic on the host.
-- `baseplate_socketproxy`: internal-only. Carries Watchtower ↔ socket-proxy traffic so Watchtower never touches the raw Docker socket.
+## Profiles
 
-## Gotchas worth knowing
+Compose only starts a service when its profile is selected:
 
-Things that bit me during setup. Some apply to Cloudflare Tunnel + Traefik. Some are general homelab traps.
-
-### 1. Remotely-managed vs locally-managed tunnels
-
-When you create a Tunnel in the Cloudflare Zero Trust dashboard, you can pick **Cloudflared** (locally-managed: ingress in a local YAML file) or you can let the dashboard manage it (remotely-managed: ingress in the UI).
-
-`baseplate` assumes **remotely-managed**. If you used `cloudflared tunnel create` from the CLI without the dashboard, your tunnel may be locally-managed and the dashboard will tell you "Routes are configured via the local configuration file." In that case: delete and recreate, picking the dashboard-managed flow, or move ingress into a YAML file mounted into the `cloudflared` container.
-
-### 2. HTTP vs HTTPS in the Public Hostname
-
-When you add a Public Hostname in Zero Trust, the **Type** field decides whether the tunnel makes an HTTP or HTTPS request to your origin. The default is HTTPS. If your container speaks HTTP, you get a `502 Bad Gateway` with `tls: first record does not look like a TLS handshake` in the `cloudflared` logs.
-
-Set Type to **HTTP** for plain-HTTP origins. Most containers behind Traefik fall into that bucket, since Traefik terminates TLS for them and the container itself sees plain HTTP.
-
-### 3. SPF can only appear once
-
-If you also set up Cloudflare Email Routing for your domain, it creates an `MX` record plus an SPF `TXT` record like `v=spf1 include:_spf.mx.cloudflare.net ~all`. If you later add a transactional mail provider (Resend, Mailgun, SES, ...) and they tell you to add an SPF record, **do not add a second one**. A domain can only have one effective SPF record. Merge them:
-
-```
-v=spf1 include:_spf.mx.cloudflare.net include:amazonses.com ~all
+```sh
+docker compose --profile nextcloud --profile media --profile monitoring up -d
 ```
 
-DKIM records use distinct selectors and coexist without merging. DMARC is a single record at `_dmarc.example.com`.
+Routes for services you do not run stay in `dynamic.yml` and return 502 until the
+service is up. Comment out the ones you skip, or leave them.
 
-### 4. Cloudflare DDNS does not coexist with Cloudflare Tunnel for the same hostname
+## App notes
 
-If you proxy `cloud.example.com` through the Tunnel, don't also point a DDNS A-record at it. Pick one origin model per hostname.
+**Vaultwarden.** Hash the admin token; do not store it in plaintext:
 
-### 5. Vaultwarden's `ADMIN_TOKEN` should be Argon2-hashed
-
-Vaultwarden accepts a plaintext `ADMIN_TOKEN` and will start with one, but it logs a startup warning, and the token then sits in your compose env vars in cleartext. Generate an Argon2 hash:
-
-```bash
-docker run --rm vaultwarden/server:latest vaultwarden hash
+```sh
+docker run --rm vaultwarden/server:latest /vaultwarden hash
 ```
 
-Paste the resulting `$argon2id$v=19$...` string as the `ADMIN_TOKEN` value.
+Put the resulting `$argon2id$...` string in `VAULTWARDEN_ADMIN_TOKEN`.
 
-### 6. MariaDB password env vars only matter on first run
+**MQTT.** The broker ships with `allow_anonymous false`, so create the passwd file
+and a user before enabling the profile:
 
-If you bring up `nextcloud_db` once and later change `MYSQL_PASSWORD` in your `.env`, the container won't notice. Its volume already has the user with the old password baked in. You have to `ALTER USER` from inside the running container, then update Nextcloud's `config.php` to match. Set strong distinct passwords from the start.
-
-### 7. Home Assistant runs in host network mode
-
-The `assistant` profile uses `network_mode: host`. Home Assistant shares the host's network stack so mDNS/SSDP, HomeKit and Matter discover devices on your LAN without bridge-network NAT in the way.
-
-`privileged` is **off** by default. HA doesn't need it for network/MQTT integrations. Uncomment it, and add the relevant `devices:`, only if you pass through a USB/Zigbee/Bluetooth dongle.
-
-That also puts HA outside the `proxy` network, so Traefik can't reverse-proxy it via Docker labels. Reach HA at `http://<host-ip>:8123`, or point a Cloudflare Tunnel Public Hostname at `http://host.docker.internal:8123` (on Linux, add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `cloudflared` service for that name to resolve).
-
-### 8. Nextcloud needs Redis config in `config.php` too
-
-The `REDIS_HOST` env var alone won't activate Redis. After Nextcloud's first start, edit `config/config.php` inside the container and add the `memcache.local`, `memcache.locking`, and `redis` entries. Skip this step and Nextcloud falls back to file locking. You'll see "Transactional file locking is disabled" in the admin overview.
-
-### 9. Don't reuse passwords across services
-
-Yes, even on a homelab. If one container is exploited and your DB credentials are reused as your Vaultwarden admin token... you don't want that.
-
-## Security defaults
-
-`baseplate` ships with these defaults:
-
-- **No raw Docker socket for Watchtower.** It reaches the Docker API through a [`socket-proxy`](https://github.com/linuxserver/docker-socket-proxy) on an internal-only network, exposing only the container/image endpoints it needs, not the root-equivalent `/var/run/docker.sock`.
-- **`no-new-privileges`** on every app container, so a compromised process can't escalate via setuid binaries.
-- **Stateful apps excluded from auto-update.** Watchtower won't auto-bump `nextcloud`, `vaultwarden`, `paperless` or the databases (Nextcloud can't skip major versions). Pin those to explicit image tags and update them on purpose.
-- **Security headers** (HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`) on every Traefik route via the shared `sec-headers` middleware.
-- **Home Assistant runs unprivileged** by default (host networking only).
-- **Databases on an `internal` network** with no host bridge or internet.
-
-For an admin UI that has no auth of its own, put Traefik basic-auth in front (chain it with the headers middleware):
-
-```yaml
-labels:
-  # htpasswd -nbB user 'password'  — note the doubled $$ for compose
-  traefik.http.middlewares.admin-auth.basicauth.users: "user:$$2y$$05$$..."
-  traefik.http.routers.my-app.middlewares: "admin-auth@docker,sec-headers@docker"
+```sh
+touch mosquitto/passwd
+docker compose --profile mqtt up -d mosquitto
+docker compose exec mosquitto mosquitto_passwd -b /mosquitto/config/passwd user pass
+docker compose restart mosquitto
 ```
 
-## Customization
+**Gitea.** Git-over-SSH is published on host port 2222. Clone with
+`git clone ssh://git@git.${DOMAIN}:2222/owner/repo.git`.
 
-Each service lives in `compose.yml` and opts in via a `profiles:` entry. To add your own app:
+**Jellyfin transcoding.** Uncomment the `devices` block in `media.yml`. On x86 use
+`/dev/dri` (VAAPI/QuickSync); on a Pi 5 use the `/dev/video1{0,1,2}` V4L2 devices.
 
-```yaml
-my-app:
-  image: ghcr.io/example/my-app:latest
-  restart: unless-stopped
-  profiles: ["my-app"]
-  networks: [proxy]
-  labels:
-    traefik.enable: "true"
-    traefik.http.routers.my-app.rule: "Host(`my-app.${DOMAIN}`)"
-    traefik.http.routers.my-app.entrypoints: "websecure"
-    traefik.http.routers.my-app.tls.certresolver: "cloudflare"
-    traefik.http.services.my-app.loadbalancer.server.port: "8080"
-```
+**Beszel.** Start the hub, create the admin user, copy its public key into
+`BESZEL_KEY`, then recreate the agent so it trusts the hub.
 
-Then add a Public Hostname in the dashboard pointing `my-app.example.com` at `http://my-app:8080`, and:
+## Remote access
 
-```bash
-docker compose --profile nextcloud --profile vaultwarden --profile my-app up -d
-```
+Default is LAN-only. Pick one:
+
+- **Cloudflare Tunnel** (`--profile tunnel`): create a remotely-managed tunnel, set
+  `CLOUDFLARED_TUNNEL_TOKEN`, and add Public Hostnames pointing at `http://traefik:80`.
+  No router ports to open.
+- **WireGuard** (`--profile wireguard`): open UDP 51820, set `WG_SERVER_HOSTNAME`,
+  and connect with the generated peer configs. Nothing else faces the internet.
+
+## Updating
+
+Watchtower updates running containers nightly and skips the stateful apps
+(`nextcloud`, `vaultwarden`, `gitea`, `paperless` and their databases) so a major
+version never lands unattended. Bump those tags yourself when you are ready.
+
+## AI assistance
+
+Parts of this template and its docs were written with AI assistance. I run the
+stack myself and tested the configuration before publishing it.
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,183 @@
+# media — jellyfin + the *arr stack + a torrent client.
+# Torrent traffic can be routed through a VPN with the `vpn` profile (gluetun).
+
+networks:
+  proxy:
+    name: proxy
+
+volumes:
+  jellyfin_config:
+  jellyfin_cache:
+  sonarr_config:
+  radarr_config:
+  prowlarr_config:
+  bazarr_config:
+  tdarr_server:
+  tdarr_configs:
+  tdarr_logs:
+  qbittorrent_config:
+  downloads:
+  media:
+
+services:
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    cpus: 3.0
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
+      - media:/media
+    # Hardware transcoding. Uncomment for your platform:
+    #   x86 (VAAPI / Intel QuickSync): mount /dev/dri and add the render group.
+    #   Raspberry Pi 5 (V4L2 M2M): mount the /dev/video1{0,1,2} devices.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "video"
+    #   - "render"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - sonarr_config:/config
+      - downloads:/downloads
+      - media:/media
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - radarr_config:/config
+      - downloads:/downloads
+      - media:/media
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - prowlarr_config:/config
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - bazarr_config:/config
+      - media:/media
+
+  tdarr:
+    image: ghcr.io/haveagitgat/tdarr:latest
+    container_name: tdarr
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["media"]
+    networks: [proxy]
+    cpus: 3.0
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - tdarr_server:/app/server
+      - tdarr_configs:/app/configs
+      - tdarr_logs:/app/logs
+      - media:/media
+      - downloads:/temp
+
+  # Torrent client. With the `vpn` profile it shares gluetun's network namespace
+  # so all traffic leaves through the VPN. Without it, qbittorrent joins `proxy`
+  # directly (LAN-only) — see the commented block below.
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["vpn"]
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-UTC}"
+      WEBUI_PORT: "8080"
+    volumes:
+      - qbittorrent_config:/config
+      - downloads:/downloads
+
+  # qBittorrent without a VPN (LAN-only). Enable with the `media` profile and
+  # comment out the gluetun-bound service above if you do not want a VPN.
+  # qbittorrent:
+  #   image: lscr.io/linuxserver/qbittorrent:latest
+  #   container_name: qbittorrent
+  #   restart: unless-stopped
+  #   security_opt: ["no-new-privileges:true"]
+  #   profiles: ["media"]
+  #   networks: [proxy]
+  #   environment:
+  #     PUID: "${PUID:-1000}"
+  #     PGID: "${PGID:-1000}"
+  #     TZ: "${TZ:-UTC}"
+  #     WEBUI_PORT: "8080"
+  #   volumes:
+  #     - qbittorrent_config:/config
+  #     - downloads:/downloads
+
+  # VPN gateway for the torrent client. Fill in your provider in .env.
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    profiles: ["vpn"]
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    networks: [proxy]
+    environment:
+      VPN_SERVICE_PROVIDER: "${VPN_SERVICE_PROVIDER}"
+      VPN_TYPE: "${VPN_TYPE:-openvpn}"
+      OPENVPN_USER: "${VPN_USER}"
+      OPENVPN_PASSWORD: "${VPN_PASSWORD}"
+      SERVER_COUNTRIES: "${VPN_COUNTRIES}"
+      TZ: "${TZ:-UTC}"
+      # Let LAN/Docker subnets reach the qBittorrent WebUI past the VPN firewall.
+      FIREWALL_OUTBOUND_SUBNETS: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"

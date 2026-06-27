@@ -1,0 +1,47 @@
+# home — smart-home hub and MQTT broker.
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+
+services:
+
+  # Home Assistant runs on the host network, the mode it recommends: mDNS/SSDP,
+  # HomeKit, Matter, and most integrations need LAN-level discovery. Reach it at
+  # http://<host>:8123. It sits outside the proxy network by design; to expose it
+  # through Traefik, route to host.docker.internal:8123 in dynamic.yml.
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["assistant"]
+    network_mode: host
+    # privileged + devices are only needed for a USB/Zigbee/Bluetooth dongle.
+    # privileged: true
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    volumes:
+      - ${HASS_CONFIG_DIR:-./hassio/config}:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      TZ: "${TZ:-UTC}"
+
+  # MQTT broker. The shipped config requires authentication (no anonymous
+  # access). Create users with:
+  #   docker compose exec mosquitto mosquitto_passwd -c /mosquitto/config/passwd <user>
+  # then `chown 1883:1883` the passwd file and restart. See README "MQTT".
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["mqtt"]
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log

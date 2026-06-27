@@ -1,0 +1,151 @@
+# Traefik dynamic config (TEMPLATE).
+#
+# config-render substitutes ${DOMAIN} and writes traefik/dynamic.yml. Edit this
+# file, not the generated one. Routers for services you do not run are harmless
+# (they return 502 until the service is up) — comment out the ones you skip.
+#
+# Default posture: every route is LAN-only (ipAllowList) + security headers.
+# Admin UIs without their own login also get basic auth.
+
+http:
+  routers:
+    nextcloud:
+      rule: "Host(`cloud.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: nextcloud
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    vaultwarden:
+      rule: "Host(`vault.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: vaultwarden
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    gitea:
+      rule: "Host(`git.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: gitea
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    paperless:
+      rule: "Host(`paperless.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: paperless
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    homarr:
+      rule: "Host(`dash.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: homarr
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    uptime-kuma:
+      rule: "Host(`status.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: uptime-kuma
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    jellyfin:
+      rule: "Host(`media.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: jellyfin
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    beszel:
+      rule: "Host(`beszel.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: beszel
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    # Admin UIs with no built-in auth — add basic auth on top.
+    sonarr:
+      rule: "Host(`sonarr.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: sonarr
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    radarr:
+      rule: "Host(`radarr.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: radarr
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    prowlarr:
+      rule: "Host(`prowlarr.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: prowlarr
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    traefik:
+      rule: "Host(`traefik.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: api@internal
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+
+  services:
+    nextcloud:
+      loadBalancer:
+        servers: [{ url: "http://nextcloud:80" }]
+    vaultwarden:
+      loadBalancer:
+        servers: [{ url: "http://vaultwarden:80" }]
+    gitea:
+      loadBalancer:
+        servers: [{ url: "http://gitea:3000" }]
+    paperless:
+      loadBalancer:
+        servers: [{ url: "http://paperless:8000" }]
+    homarr:
+      loadBalancer:
+        servers: [{ url: "http://homarr:7575" }]
+    uptime-kuma:
+      loadBalancer:
+        servers: [{ url: "http://uptime-kuma:3001" }]
+    jellyfin:
+      loadBalancer:
+        servers: [{ url: "http://jellyfin:8096" }]
+    beszel:
+      loadBalancer:
+        servers: [{ url: "http://beszel:8090" }]
+    sonarr:
+      loadBalancer:
+        servers: [{ url: "http://sonarr:8989" }]
+    radarr:
+      loadBalancer:
+        servers: [{ url: "http://radarr:7878" }]
+    prowlarr:
+      loadBalancer:
+        servers: [{ url: "http://prowlarr:9696" }]
+
+  middlewares:
+    lan-only:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+    sec-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+    # Replace the hash: htpasswd -nbB admin 'yourpassword'  (escape $ as $$ if
+    # you ever inline this in a compose label; in this file a single $ is fine).
+    admin-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$05$REPLACE_WITH_YOUR_OWN_BCRYPT_HASH00000000000000000000"
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/wildcard.crt
+        keyFile: /etc/traefik/certs/wildcard.key

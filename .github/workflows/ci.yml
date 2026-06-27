@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compose:
+    name: compose config
+    runs-on: ubuntu-latest
+    env:
+      DOMAIN: example.com
+      CF_DNS_API_TOKEN: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render dynamic.yml
+        run: |
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          envsubst '$DOMAIN' < traefik/dynamic.yml.template > traefik/dynamic.yml
+      - name: Validate full merge
+        run: docker compose config >/dev/null
+      - name: Validate each profile
+        run: |
+          for p in nextcloud vaultwarden gitea homarr kuma paperless media vpn assistant mqtt monitoring tunnel wireguard ddns; do
+            echo "profile: $p"
+            docker compose --profile "$p" config >/dev/null
+          done
+
+  lint:
+    name: yaml + shell + render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yamllint
+        run: |
+          pipx install yamllint
+          yamllint -d '{extends: default, rules: {line-length: disable, comments: disable, document-start: disable, truthy: disable}}' \
+            compose.yml core.yml cloud.yml media.yml home.yml monitoring.yml traefik/*.yml
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -S warning scripts/*.sh
+      - name: rendered dynamic.yml is valid YAML
+        run: |
+          sudo apt-get install -y gettext-base
+          DOMAIN=example.com envsubst '$DOMAIN' < traefik/dynamic.yml.template > /tmp/dynamic.yml
+          python3 -c 'import yaml,sys; yaml.safe_load(open("/tmp/dynamic.yml"))'
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
