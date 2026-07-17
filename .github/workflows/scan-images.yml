@@ -18,7 +18,7 @@ jobs:
     outputs:
       images: ${{ steps.images.outputs.images }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Generate image list
         id: images
@@ -36,7 +36,7 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.list-images.outputs.images) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Sanitize image name for filenames
         id: meta
