@@ -1,0 +1,63 @@
+name: Scan container images
+
+on:
+  schedule:
+    # 04:00 UTC every Monday
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  list-images:
+    name: List images
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate image list
+        id: images
+        run: |
+          images=$(sh scripts/list-images.sh)
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  trivy:
+    name: Trivy image scan
+    needs: list-images
+    runs-on: ubuntu-latest
+    if: ${{ needs.list-images.outputs.images != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.list-images.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanitize image name for filenames
+        id: meta
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          safe=$(printf '%s' "$IMAGE" | tr '/:@' '_')
+          echo "safe=$safe" >> "$GITHUB_OUTPUT"
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: ${{ matrix.image }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: sarif
+          output: trivy-${{ steps.meta.outputs.safe }}.sarif
+
+      - name: Upload SARIF
+        if: success() || failure()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ steps.meta.outputs.safe }}.sarif
+          category: trivy-${{ matrix.image }}

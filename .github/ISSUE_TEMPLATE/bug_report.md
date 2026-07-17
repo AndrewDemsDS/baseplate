@@ -13,7 +13,7 @@ A clear description of the problem.
 
 Profiles enabled, the command you ran, and what you saw.
 
-```
+```sh
 docker compose --profile ... up -d
 ```
 

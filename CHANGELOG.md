@@ -6,6 +6,7 @@ All notable changes are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+
 - Split the monolithic `compose.yml` into role-based include files
   (`core`, `cloud`, `media`, `home`, `monitoring`).
 - Moved routing to Traefik's file provider (`traefik/dynamic.yml`), rendered from a
@@ -15,6 +16,7 @@ All notable changes are documented here. The format follows
 - Made LAN-only the default; Cloudflare Tunnel and WireGuard are now opt-in profiles.
 
 ### Added
+
 - Beszel (hub + agent) and a Trivy vuln-scanner under the `monitoring` profile.
 - Gitea, Homarr, and Uptime Kuma under the `cloud` profiles.
 - `no-new-privileges` on every service, CPU/memory caps on the heavy containers, and
@@ -22,4 +24,5 @@ All notable changes are documented here. The format follows
 - Community files: CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, issue/PR templates, CI.
 
 ### Removed
+
 - Standalone `arr-stack.yml` (folded into `media.yml`).

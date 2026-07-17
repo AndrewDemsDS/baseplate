@@ -9,7 +9,7 @@ Tested on a Raspberry Pi 5 (Debian 13) and an x86 mini-PC/NAS. Any Docker host w
 ## What you get
 
 | Service | Profile | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | Traefik | (default) | Reverse proxy, file-provider routing, wildcard TLS |
 | acme.sh | (default) | Issues/renews `*.${DOMAIN}` over Cloudflare DNS-01 |
 | socket-proxy + Watchtower | (default) | Nightly updates without the raw Docker socket |
@@ -138,6 +138,28 @@ version never lands unattended. Bump those tags yourself when you are ready.
 
 Parts of this template and its docs were written with AI assistance. I run the
 stack myself and tested the configuration before publishing it.
+
+## Development
+
+The repo ships with a GitHub Actions CI pipeline and a local `justfile` so you
+can run the same checks before pushing:
+
+```sh
+just lint   # yamllint, shellcheck, markdownlint
+just test   # compose config (all profiles), env coverage, Traefik render
+just scan   # local Trivy scan of every image used in the stack
+```
+
+CI runs on every PR and push to `main`:
+
+- compose config validation (merged + every profile)
+- rendered `traefik/dynamic.yml` YAML check
+- `.env.example` coverage check
+- yamllint, shellcheck, markdownlint
+- gitleaks secret scan
+
+A scheduled weekly Trivy image scan uploads results to the GitHub Security tab,
+and Dependabot keeps GitHub Actions and Docker base images current.
 
 ## License
 

@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email the maintainer at you@example.com with details and steps to reproduce. Do
+Email the maintainer at <you@example.com> with details and steps to reproduce. Do
 not open a public issue for a security problem. Expect an acknowledgement within a
 few days.
 

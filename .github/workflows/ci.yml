@@ -4,22 +4,33 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  compose:
-    name: compose config
+  validate:
+    name: Validate compose and Traefik config
     runs-on: ubuntu-latest
     env:
       DOMAIN: example.com
       CF_DNS_API_TOKEN: dummy
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install gettext
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext-base
+
       - name: Render dynamic.yml
         run: |
-          sudo apt-get update && sudo apt-get install -y gettext-base
           envsubst '$DOMAIN' < traefik/dynamic.yml.template > traefik/dynamic.yml
-      - name: Validate full merge
+
+      - name: Validate full merged compose config
         run: docker compose config >/dev/null
+
       - name: Validate each profile
         run: |
           for p in nextcloud vaultwarden gitea homarr kuma paperless media vpn assistant mqtt monitoring tunnel wireguard ddns; do
@@ -27,28 +38,50 @@ jobs:
             docker compose --profile "$p" config >/dev/null
           done
 
-  lint:
-    name: yaml + shell + render
+      - name: Validate rendered dynamic.yml is valid YAML
+        run: |
+          python3 -c 'import yaml,sys; yaml.safe_load(open("traefik/dynamic.yml")); print("dynamic.yml OK")'
+
+  env-coverage:
+    name: Check .env.example coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: yamllint
+      - name: Run env-coverage check
+        run: sh scripts/check-env-coverage.sh
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML
+        run: yamllint -c .yamllint compose.yml core.yml cloud.yml media.yml home.yml monitoring.yml traefik/*.yml .github/workflows/*.yml
+
+      - name: Install shellcheck
         run: |
-          pipx install yamllint
-          yamllint -d '{extends: default, rules: {line-length: disable, comments: disable, document-start: disable, truthy: disable}}' \
-            compose.yml core.yml cloud.yml media.yml home.yml monitoring.yml traefik/*.yml
-      - name: shellcheck
-        run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck -S warning scripts/*.sh
-      - name: rendered dynamic.yml is valid YAML
-        run: |
-          sudo apt-get install -y gettext-base
-          DOMAIN=example.com envsubst '$DOMAIN' < traefik/dynamic.yml.template > /tmp/dynamic.yml
-          python3 -c 'import yaml,sys; yaml.safe_load(open("/tmp/dynamic.yml"))'
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning scripts/*.sh
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          config: .markdownlint.jsonc
 
   secrets:
-    name: secret scan
+    name: Secret scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

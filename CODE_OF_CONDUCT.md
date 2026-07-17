@@ -5,5 +5,5 @@ version 2.1.
 
 Be respectful. Harassment, personal attacks, and discrimination are not welcome.
 
-Report unacceptable behavior to you@example.com. Reports stay confidential, and the
+Report unacceptable behavior to <you@example.com>. Reports stay confidential, and the
 maintainer will review and act on them.

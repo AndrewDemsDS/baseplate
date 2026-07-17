@@ -15,23 +15,36 @@ most changes touch YAML, the Traefik config, or the docs.
 
 ## Before you open a PR
 
-Run these locally:
+Run the full local check suite:
 
 ```sh
-# compose files parse and merge
-docker compose config >/dev/null
-docker compose --profile nextcloud --profile media --profile monitoring config >/dev/null
+just lint   # yamllint + shellcheck + markdownlint
+just test   # compose config (merged + every profile) + env coverage + Traefik render
+```
 
-# the rendered Traefik config is valid YAML
+Or run the same commands directly:
+
+```sh
+# render the Traefik config and validate the output is valid YAML
 DOMAIN=example.com envsubst '$DOMAIN' < traefik/dynamic.yml.template \
   | python3 -c 'import sys,yaml; yaml.safe_load(sys.stdin)'
 
+# compose files parse and merge
+docker compose config >/dev/null
+for p in nextcloud vaultwarden gitea homarr kuma paperless media vpn assistant mqtt monitoring tunnel wireguard ddns; do
+  docker compose --profile "$p" config >/dev/null
+done
+
 # lint
-yamllint -d '{extends: default, rules: {line-length: disable}}' .
-shellcheck scripts/*.sh
+yamllint -c .yamllint compose.yml core.yml cloud.yml media.yml home.yml monitoring.yml traefik/*.yml
+shellcheck -S warning scripts/*.sh
+npx -y markdownlint-cli2 '**/*.md' --config .markdownlint.jsonc
+
+# ensure .env.example documents every environment variable used in the stack
+sh scripts/check-env-coverage.sh
 ```
 
-CI runs the same checks plus a secret scan on every PR.
+CI runs all of the above plus a secret scan on every PR.
 
 ## Commit and PR conventions
 
