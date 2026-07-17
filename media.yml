@@ -1,5 +1,10 @@
 # media — jellyfin + the *arr stack + a torrent client.
 # Torrent traffic can be routed through a VPN with the `vpn` profile (gluetun).
+#
+# Note on the .NET apps (jellyfin, sonarr, radarr, prowlarr): on some kernels the
+# default server GC crash-loops these with "general protection" faults. If you
+# hit that, uncomment the DOTNET_gcServer/DOTNET_gcConcurrent lines below to force
+# workstation GC. Left off by default since it is a per-kernel workaround.
 
 networks:
   proxy:
@@ -29,6 +34,9 @@ services:
     profiles: ["media"]
     networks: [proxy]
     cpus: 3.0
+    # environment:
+    #   DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+    #   DOTNET_gcConcurrent: "0"
     volumes:
       - jellyfin_config:/config
       - jellyfin_cache:/cache
@@ -53,6 +61,8 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       TZ: "${TZ:-UTC}"
+      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+      # DOTNET_gcConcurrent: "0"
     volumes:
       - sonarr_config:/config
       - downloads:/downloads
@@ -69,6 +79,8 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       TZ: "${TZ:-UTC}"
+      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+      # DOTNET_gcConcurrent: "0"
     volumes:
       - radarr_config:/config
       - downloads:/downloads
@@ -85,6 +97,8 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       TZ: "${TZ:-UTC}"
+      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+      # DOTNET_gcConcurrent: "0"
     volumes:
       - prowlarr_config:/config
 

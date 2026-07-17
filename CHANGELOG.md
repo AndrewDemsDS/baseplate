@@ -22,6 +22,11 @@ All notable changes are documented here. The format follows
 - `no-new-privileges` on every service, CPU/memory caps on the heavy containers, and
   basic auth on admin UIs without their own login.
 - Community files: CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, issue/PR templates, CI.
+- Nextcloud cron container and a MariaDB healthcheck so Nextcloud waits on an
+  initialised database, plus documented DOTNET workstation-GC toggles for the
+  .NET media apps.
+- Local `justfile` and CI checks (yamllint, shellcheck, markdownlint, `.env.example`
+  coverage), Dependabot for GitHub Actions, and a scheduled Trivy image scan.
 
 ### Removed
 

@@ -28,7 +28,11 @@ services:
     security_opt: ["no-new-privileges:true"]
     profiles: ["nextcloud"]
     networks: [proxy, internal]
-    depends_on: [nextcloud_db, nextcloud_redis]
+    depends_on:
+      nextcloud_db:
+        condition: service_healthy
+      nextcloud_redis:
+        condition: service_started
     cpus: 2.0
     volumes:
       - nextcloud_data:/var/www/html
@@ -41,6 +45,25 @@ services:
       OVERWRITEPROTOCOL: https
       OVERWRITECLIURL: "https://cloud.${DOMAIN}"
       TRUSTED_PROXIES: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+      APACHE_BODY_LIMIT: "0"   # no upload size cap at the Apache layer
+
+  # Background jobs. Nextcloud needs a cron runner; without it the instance falls
+  # back to less reliable AJAX cron. Shares the app volume with the web container.
+  nextcloud_cron:
+    image: nextcloud:apache
+    container_name: nextcloud_cron
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    profiles: ["nextcloud"]
+    networks: [internal]
+    entrypoint: /cron.sh
+    depends_on:
+      nextcloud_db:
+        condition: service_healthy
+      nextcloud_redis:
+        condition: service_started
+    volumes:
+      - nextcloud_data:/var/www/html
 
   nextcloud_db:
     image: mariadb:10.11
@@ -56,6 +79,14 @@ services:
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
       MYSQL_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+    # Lets dependents wait on `service_healthy` so Nextcloud never starts against
+    # an uninitialised database.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   nextcloud_redis:
     image: redis:alpine
