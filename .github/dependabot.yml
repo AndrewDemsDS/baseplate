@@ -8,9 +8,8 @@ updates:
     commit-message:
       prefix: ci
 
-  - package-ecosystem: docker
-    directory: /
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: chore
+# Note: no `docker` ecosystem here. Dependabot's docker updater only reads
+# Dockerfiles / Kubernetes YAML, not `image:` tags in Compose files, so it just
+# errors out on this repo. Image freshness is handled by the in-stack Watchtower
+# service, the scheduled Trivy scan (scan-images.yml), and manual bumps of the
+# deliberately pinned tags.
