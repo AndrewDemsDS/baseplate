@@ -54,6 +54,7 @@ jobs:
           # Only fail on CVEs upstream has already patched, so a red run means
           # "pull a newer image" rather than "Debian has no fix yet".
           ignore-unfixed: true
+          ignore-policy: .trivyignore.rego
           exit-code: '1'
           format: sarif
           output: trivy-${{ steps.meta.outputs.safe }}.sarif

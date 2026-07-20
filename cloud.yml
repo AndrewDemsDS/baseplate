@@ -66,7 +66,7 @@ services:
       - nextcloud_data:/var/www/html
 
   nextcloud_db:
-    image: mariadb:10.11
+    image: mariadb:11.4
     container_name: nextcloud_db
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -144,7 +144,7 @@ services:
       SECRET_ENCRYPTION_KEY: "${HOMARR_SECRET_KEY}"
 
   uptime-kuma:
-    image: louislam/uptime-kuma:1
+    image: louislam/uptime-kuma:2
     container_name: uptime-kuma
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]

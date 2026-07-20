@@ -142,14 +142,16 @@ services:
   # Classic DDNS A-record updates, for a direct-IP setup without the tunnel.
   #   docker compose --profile ddns up -d
   cloudflare-ddns:
-    image: oznu/cloudflare-ddns:latest
+    image: favonia/cloudflare-ddns:1
     container_name: cloudflare-ddns
     restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     profiles: ["ddns"]
     environment:
-      API_KEY: "${DDNS_API_KEY}"
-      ZONE: "${DOMAIN}"
-      SUBDOMAIN: "${DDNS_SUBDOMAIN}"
+      CLOUDFLARE_API_TOKEN: "${DDNS_API_TOKEN}"
+      DOMAINS: "${DDNS_SUBDOMAIN}.${DOMAIN}"
       PROXIED: "false"
-      INTERVAL: "300"
+      UPDATE_CRON: "@every 5m"
