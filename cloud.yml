@@ -66,7 +66,10 @@ services:
       - nextcloud_data:/var/www/html
 
   nextcloud_db:
-    image: mariadb:11.4
+    # Pinned to the 10.11 LTS (supported to Feb 2028) on purpose. 11.4 clears no
+    # CVEs over 10.11 and a major bump is one-way: it needs mariadb-upgrade
+    # against the Nextcloud database with no supported downgrade.
+    image: mariadb:10.11
     container_name: nextcloud_db
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
