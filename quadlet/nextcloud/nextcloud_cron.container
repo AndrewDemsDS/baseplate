@@ -1,0 +1,20 @@
+[Unit]
+Description=baseplate: nextcloud_cron
+After=nextcloud_db.service
+Requires=nextcloud_db.service
+After=nextcloud_redis.service
+Requires=nextcloud_redis.service
+
+[Container]
+ContainerName=nextcloud_cron
+Image=docker.io/nextcloud:apache
+Entrypoint=/cron.sh
+Volume=nextcloud_data:/var/www/html
+Network=baseplate_internal.network
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

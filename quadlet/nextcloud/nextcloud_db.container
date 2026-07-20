@@ -1,0 +1,27 @@
+[Unit]
+Description=baseplate: nextcloud_db
+
+[Container]
+ContainerName=nextcloud_db
+Image=docker.io/mariadb:10.11
+Environment=MYSQL_ROOT_PASSWORD=${NEXTCLOUD_DB_ROOT_PASSWORD}
+Environment=MYSQL_DATABASE=nextcloud
+Environment=MYSQL_USER=nextcloud
+Environment=MYSQL_PASSWORD=${NEXTCLOUD_DB_PASSWORD}
+Volume=nextcloud_db:/var/lib/mysql
+Network=baseplate_internal.network
+User=999
+NoNewPrivileges=true
+HealthCmd=healthcheck.sh --connect --innodb_initialized
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=30s
+Notify=healthy
+
+[Service]
+TimeoutStartSec=300
+Restart=always
+
+[Install]
+WantedBy=default.target

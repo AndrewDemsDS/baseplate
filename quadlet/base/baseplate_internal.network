@@ -1,0 +1,10 @@
+[Unit]
+Description=baseplate network: baseplate_internal
+
+[Network]
+NetworkName=baseplate_internal
+Internal=true
+Options=mtu=${PODMAN_NET_MTU}
+
+[Install]
+WantedBy=default.target

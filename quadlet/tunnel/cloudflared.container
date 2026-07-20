@@ -1,0 +1,15 @@
+[Unit]
+Description=baseplate: cloudflared
+
+[Container]
+ContainerName=cloudflared
+Image=docker.io/cloudflare/cloudflared:latest
+Network=proxy.network
+NoNewPrivileges=true
+Exec=tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

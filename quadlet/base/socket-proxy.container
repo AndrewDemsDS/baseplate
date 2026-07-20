@@ -1,0 +1,21 @@
+[Unit]
+Description=baseplate: socket-proxy
+RequiresMountsFor=/var/run/docker.sock
+
+[Container]
+ContainerName=socket-proxy
+Image=lscr.io/linuxserver/socket-proxy:latest
+Environment=CONTAINERS=1
+Environment=IMAGES=1
+Environment=POST=1
+Environment=PING=1
+Environment=VERSION=1
+Volume=/var/run/docker.sock:/var/run/docker.sock:ro
+Network=baseplate_socketproxy.network
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

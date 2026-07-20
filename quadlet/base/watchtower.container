@@ -1,0 +1,19 @@
+[Unit]
+Description=baseplate: watchtower
+After=socket-proxy.service
+Requires=socket-proxy.service
+
+[Container]
+ContainerName=watchtower
+Image=docker.io/nickfedor/watchtower:latest
+Environment=DOCKER_HOST=tcp://socket-proxy:2375
+Network=baseplate_socketproxy.network
+NoNewPrivileges=true
+Exec=--schedule "0 0 4 * * *" --cleanup --disable-containers nextcloud nextcloud_db vaultwarden gitea paperless paperless_db
+
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

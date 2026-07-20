@@ -1,0 +1,20 @@
+[Unit]
+Description=baseplate: cloudflare-ddns
+
+[Container]
+ContainerName=cloudflare-ddns
+Image=docker.io/favonia/cloudflare-ddns:1
+Environment=CLOUDFLARE_API_TOKEN=${DDNS_API_TOKEN}
+Environment=DOMAINS=${DDNS_SUBDOMAIN}.${DOMAIN}
+Environment=PROXIED=false
+Environment=UPDATE_CRON=@every 5m
+DropCapability=ALL
+User=1000:1000
+ReadOnly=true
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

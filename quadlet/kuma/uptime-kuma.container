@@ -1,0 +1,15 @@
+[Unit]
+Description=baseplate: uptime-kuma
+
+[Container]
+ContainerName=uptime-kuma
+Image=docker.io/louislam/uptime-kuma:2-slim
+Volume=uptime_kuma_data:/app/data
+Network=proxy.network
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
