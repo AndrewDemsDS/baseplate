@@ -70,14 +70,31 @@ jobs:
           ENV_FILE=.env UNIT_DIR=/tmp/units ./scripts/install-quadlets.sh \
             nextcloud vaultwarden gitea homarr kuma paperless media vpn \
             assistant mqtt monitoring tunnel wireguard ddns
-          quadlet=$(command -v quadlet || echo /usr/libexec/podman/quadlet)
-          QUADLET_UNIT_DIRS=/tmp/units "$quadlet" -dryrun > /tmp/out.txt 2>/tmp/err.txt
+          # The generator binary moves around between distros.
+          quadlet=""
+          for c in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet \
+                   /usr/lib/systemd/system-generators/podman-system-generator \
+                   "$(command -v quadlet 2>/dev/null || true)"; do
+            if [ -n "$c" ] && [ -x "$c" ]; then quadlet="$c"; break; fi
+          done
+          if [ -z "$quadlet" ]; then
+            echo "::error::could not locate the quadlet generator"
+            exit 1
+          fi
+          echo "using $quadlet"
+          # -dryrun exits non-zero when a unit is bad, and we want the log first.
+          QUADLET_UNIT_DIRS=/tmp/units "$quadlet" -dryrun >/tmp/out.txt 2>/tmp/err.txt || true
           cat /tmp/err.txt
           if grep -qiE 'error|unsupported|invalid' /tmp/err.txt; then
             echo "::error::quadlet generator rejected a unit"
             exit 1
           fi
-          echo "generated $(grep -c '^---' /tmp/out.txt) units cleanly"
+          count=$(grep -c '^---' /tmp/out.txt || true)
+          if [ "${count:-0}" -lt 30 ]; then
+            echo "::error::expected 30+ units, got ${count}"
+            exit 1
+          fi
+          echo "generated ${count} units cleanly"
 
   env-coverage:
     name: Check .env.example coverage
