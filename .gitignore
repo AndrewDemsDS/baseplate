@@ -14,10 +14,12 @@ acme.json
 # MQTT credentials (ship an empty passwd; users are added at runtime)
 mosquitto/passwd
 
-# Runtime data / bind mounts
-data/
-volumes/
-hassio/
-media/
+# Runtime data / bind mounts.
+# Anchored to the repo root on purpose: an unanchored `media/` also matches
+# `quadlet/media/` and silently drops those units from commits.
+/data/
+/volumes/
+/hassio/
+/media/
 *.log
 .DS_Store

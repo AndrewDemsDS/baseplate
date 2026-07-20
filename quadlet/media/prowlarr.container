@@ -1,0 +1,18 @@
+[Unit]
+Description=baseplate: prowlarr
+
+[Container]
+ContainerName=prowlarr
+Image=lscr.io/linuxserver/prowlarr:latest
+Environment=PUID=${PUID:-1000}
+Environment=PGID=${PGID:-1000}
+Environment=TZ=${TZ:-UTC}
+Volume=prowlarr_config:/config
+Network=proxy.network
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
