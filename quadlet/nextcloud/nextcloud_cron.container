@@ -8,7 +8,7 @@ Requires=nextcloud_redis.service
 [Container]
 ContainerName=nextcloud_cron
 Image=docker.io/nextcloud:apache
-Entrypoint=/cron.sh
+PodmanArgs=--entrypoint=/cron.sh
 Volume=nextcloud_data:/var/www/html
 Network=baseplate_internal.network
 NoNewPrivileges=true

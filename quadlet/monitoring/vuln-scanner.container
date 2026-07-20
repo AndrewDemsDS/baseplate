@@ -4,7 +4,7 @@ Description=baseplate: vuln-scanner
 [Container]
 ContainerName=vuln-scanner
 Image=docker.io/aquasec/trivy:latest
-Entrypoint=/bin/sh /scan/vuln-scan.sh
+PodmanArgs=--entrypoint='["/bin/sh","/scan/vuln-scan.sh"]'
 Environment=RESEND_API_KEY=${RESEND_API_KEY:-}
 Environment=ALERT_FROM=${ALERT_EMAIL:-you@example.com}
 Environment=ALERT_EMAIL=${ALERT_EMAIL:-you@example.com}

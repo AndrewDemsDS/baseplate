@@ -10,6 +10,7 @@ traefik/dynamic.yml.template. scripts/install-quadlets.sh substitutes them
 at install time.
 """
 
+import json
 import os
 import shutil
 import sys
@@ -111,9 +112,19 @@ def build_unit(name, svc, networks, healthy_deps):
     container.append(("ContainerName", svc.get("container_name", name)))
     container.append(("Image", qualify(svc["image"])))
 
+    # Entrypoint= and AddHost= are recent quadlet keys that older podman
+    # rejects outright. PodmanArgs works everywhere, so prefer it over a
+    # prettier unit that only parses on the newest release.
     if svc.get("entrypoint"):
         ep = svc["entrypoint"]
-        container.append(("Entrypoint", ep if isinstance(ep, str) else " ".join(ep)))
+        if isinstance(ep, str):
+            container.append(("PodmanArgs", "--entrypoint=%s" % ep))
+        else:
+            # podman wants a JSON array. PodmanArgs is split on whitespace, so
+            # emit compact JSON and single-quote it to keep the inner double
+            # quotes intact through quadlet's shell-style parsing.
+            ep = json.dumps(ep, separators=(",", ":"))
+            container.append(("PodmanArgs", "--entrypoint='%s'" % ep))
 
     for k, v in as_env_pairs(svc.get("environment")):
         container.append(("Environment", "%s=%s" % (k, v)))
@@ -142,7 +153,7 @@ def build_unit(name, svc, networks, healthy_deps):
         container.append(("DropCapability", cap))
 
     for host in svc.get("extra_hosts") or []:
-        container.append(("AddHost", host))
+        container.append(("PodmanArgs", "--add-host=%s" % host))
 
     sysctls = svc.get("sysctls") or {}
     if isinstance(sysctls, list):

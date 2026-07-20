@@ -6,7 +6,7 @@ ContainerName=beszel
 Image=docker.io/henrygd/beszel:latest
 Volume=beszel_data:/beszel_data
 Network=proxy.network
-AddHost=host.docker.internal:host-gateway
+PodmanArgs=--add-host=host.docker.internal:host-gateway
 NoNewPrivileges=true
 PodmanArgs=--memory=256m
 PodmanArgs=--cpus=0.25
