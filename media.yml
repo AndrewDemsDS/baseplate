@@ -131,7 +131,10 @@ services:
     image: ghcr.io/haveagitgat/tdarr:latest
     container_name: tdarr
     cpus: 3.0
-    init: true          # same ffmpeg-zombie reason as jellyfin
+    # No `init: true` here even though it spawns ffmpeg: this image runs
+    # s6-overlay, which must be PID 1. Docker's tini takes that slot and s6
+    # dies with "s6-overlay-suexec: fatal: can only run as pid 1". The same
+    # applies to every lscr.io/linuxserver image above.
     environment:
       <<: *arr-env
       UMASK_SET: "002"
