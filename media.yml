@@ -3,8 +3,35 @@
 #
 # Note on the .NET apps (jellyfin, sonarr, radarr, prowlarr): on some kernels the
 # default server GC crash-loops these with "general protection" faults. If you
-# hit that, uncomment the DOTNET_gcServer/DOTNET_gcConcurrent lines below to force
-# workstation GC. Left off by default since it is a per-kernel workaround.
+# hit that, uncomment the DOTNET_gc* lines below to force workstation GC. Left
+# off by default since it is a per-kernel workaround.
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Everything the *arr services share. They are the same application wearing
+# different hats, so the only per-service lines below are image, name and mounts.
+x-arr: &arr
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  profiles: ["media"]
+  networks: [proxy]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-arr-env: &arr-env
+  PUID: "${PUID:-1000}"
+  PGID: "${PGID:-1000}"
+  TZ: "${TZ:-UTC}"
+  # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+  # DOTNET_gcConcurrent: "0"
 
 networks:
   proxy:
@@ -31,12 +58,20 @@ services:
     container_name: jellyfin
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["media"]
     networks: [proxy]
     cpus: 3.0
-    # environment:
-    #   DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
-    #   DOTNET_gcConcurrent: "0"
+    # ffmpeg is spawned per transcode; without an init the finished ones linger
+    # as zombies until the server restarts.
+    init: true
+    environment:
+      JELLYFIN_PublishedServerUrl: "https://media.${DOMAIN}"
+      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
+      # DOTNET_gcConcurrent: "0"
+      # Jellyfin 10.11+ runs on .NET 9, where DATAS is on by default and is a
+      # known SIGSEGV trigger under transcode load. Uncomment if it crash-loops.
+      # DOTNET_GCDynamicAdaptationMode: "0"
     volumes:
       - jellyfin_config:/config
       - jellyfin_cache:/cache
@@ -51,84 +86,60 @@ services:
     #   - "render"
 
   sonarr:
+    <<: *arr
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    profiles: ["media"]
-    networks: [proxy]
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
-      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
-      # DOTNET_gcConcurrent: "0"
+      <<: *arr-env
     volumes:
       - sonarr_config:/config
       - downloads:/downloads
       - media:/media
 
   radarr:
+    <<: *arr
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    profiles: ["media"]
-    networks: [proxy]
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
-      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
-      # DOTNET_gcConcurrent: "0"
+      <<: *arr-env
     volumes:
       - radarr_config:/config
       - downloads:/downloads
       - media:/media
 
   prowlarr:
+    <<: *arr
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    profiles: ["media"]
-    networks: [proxy]
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
-      # DOTNET_gcServer: "0"        # workstation GC (see note at top of file)
-      # DOTNET_gcConcurrent: "0"
+      <<: *arr-env
     volumes:
       - prowlarr_config:/config
 
   bazarr:
+    <<: *arr
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    profiles: ["media"]
-    networks: [proxy]
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
+      <<: *arr-env
     volumes:
       - bazarr_config:/config
       - media:/media
 
   tdarr:
+    <<: *arr
     image: ghcr.io/haveagitgat/tdarr:latest
     container_name: tdarr
-    restart: unless-stopped
-    security_opt: ["no-new-privileges:true"]
-    profiles: ["media"]
-    networks: [proxy]
     cpus: 3.0
+    init: true          # same ffmpeg-zombie reason as jellyfin
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
+      <<: *arr-env
+      UMASK_SET: "002"
+      serverIP: "0.0.0.0"
+      serverPort: "8266"
+      webUIPort: "8265"
+      internalNode: "true"
+      inContainer: "true"
     volumes:
       - tdarr_server:/app/server
       - tdarr_configs:/app/configs
@@ -139,20 +150,25 @@ services:
   # Torrent client. With the `vpn` profile it shares gluetun's network namespace
   # so all traffic leaves through the VPN. Without it, qbittorrent joins `proxy`
   # directly (LAN-only) — see the commented block below.
+  #
+  # Because it has no network stack of its own here, its WebUI is published and
+  # routed via gluetun, not via this service.
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["vpn"]
     network_mode: "service:gluetun"
     depends_on:
       gluetun:
         condition: service_healthy
+    # Torrent sessions take a moment to flush to disk; the 10s default SIGKILLs
+    # mid-write and loses resume data.
+    stop_grace_period: 30s
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      TZ: "${TZ:-UTC}"
+      <<: *arr-env
       WEBUI_PORT: "8080"
     volumes:
       - qbittorrent_config:/config
@@ -161,16 +177,12 @@ services:
   # qBittorrent without a VPN (LAN-only). Enable with the `media` profile and
   # comment out the gluetun-bound service above if you do not want a VPN.
   # qbittorrent:
+  #   <<: *arr
   #   image: lscr.io/linuxserver/qbittorrent:latest
   #   container_name: qbittorrent
-  #   restart: unless-stopped
-  #   security_opt: ["no-new-privileges:true"]
-  #   profiles: ["media"]
-  #   networks: [proxy]
+  #   stop_grace_period: 30s
   #   environment:
-  #     PUID: "${PUID:-1000}"
-  #     PGID: "${PGID:-1000}"
-  #     TZ: "${TZ:-UTC}"
+  #     <<: *arr-env
   #     WEBUI_PORT: "8080"
   #   volumes:
   #     - qbittorrent_config:/config
@@ -181,6 +193,8 @@ services:
     image: qmcgaw/gluetun:latest
     container_name: gluetun
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["vpn"]
     cap_add: [NET_ADMIN]
     devices:

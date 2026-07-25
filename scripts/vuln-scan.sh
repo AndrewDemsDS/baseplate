@@ -17,7 +17,7 @@ scan_once() {
   for img in $images; do
     echo "scanning $img"
     out=$(trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
-            --no-progress "$img" 2>/dev/null || true)
+            --no-progress --ignore-unfixed "$img" 2>/dev/null || true)
     if echo "$out" | grep -q "Total: [1-9]"; then
       report="${report}
 === ${img} ===

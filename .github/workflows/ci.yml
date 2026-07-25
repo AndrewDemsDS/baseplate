@@ -42,60 +42,6 @@ jobs:
         run: |
           python3 -c 'import yaml,sys; yaml.safe_load(open("traefik/dynamic.yml")); print("dynamic.yml OK")'
 
-  quadlet:
-    name: Validate Quadlet units
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install podman and gettext
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y podman gettext-base
-
-      - name: Check quadlet/ matches the compose files
-        run: |
-          cp -r quadlet /tmp/quadlet-committed
-          python3 scripts/gen-quadlets.py
-          if ! diff -r /tmp/quadlet-committed quadlet; then
-            echo "::error::quadlet/ is stale - run 'just gen-quadlets' and commit"
-            exit 1
-          fi
-
-      - name: Render units and validate with the real quadlet generator
-        run: |
-          cp .env.example .env
-          mkdir -p /tmp/units
-          # every profile, so no unit escapes validation
-          ENV_FILE=.env UNIT_DIR=/tmp/units ./scripts/install-quadlets.sh \
-            nextcloud vaultwarden gitea homarr kuma paperless media vpn \
-            assistant mqtt monitoring tunnel wireguard ddns
-          # The generator binary moves around between distros.
-          quadlet=""
-          for c in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet \
-                   /usr/lib/systemd/system-generators/podman-system-generator \
-                   "$(command -v quadlet 2>/dev/null || true)"; do
-            if [ -n "$c" ] && [ -x "$c" ]; then quadlet="$c"; break; fi
-          done
-          if [ -z "$quadlet" ]; then
-            echo "::error::could not locate the quadlet generator"
-            exit 1
-          fi
-          echo "using $quadlet"
-          # -dryrun exits non-zero when a unit is bad, and we want the log first.
-          QUADLET_UNIT_DIRS=/tmp/units "$quadlet" -dryrun >/tmp/out.txt 2>/tmp/err.txt || true
-          cat /tmp/err.txt
-          if grep -qiE 'error|unsupported|invalid' /tmp/err.txt; then
-            echo "::error::quadlet generator rejected a unit"
-            exit 1
-          fi
-          count=$(grep -c '^---' /tmp/out.txt || true)
-          if [ "${count:-0}" -lt 30 ]; then
-            echo "::error::expected 30+ units, got ${count}"
-            exit 1
-          fi
-          echo "generated ${count} units cleanly"
-
   env-coverage:
     name: Check .env.example coverage
     runs-on: ubuntu-latest

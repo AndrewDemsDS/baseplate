@@ -1,5 +1,12 @@
 # home — smart-home hub and MQTT broker.
 
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 volumes:
   mosquitto_data:
   mosquitto_log:
@@ -15,6 +22,7 @@ services:
     container_name: homeassistant
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["assistant"]
     network_mode: host
     # privileged + devices are only needed for a USB/Zigbee/Bluetooth dongle.
@@ -37,8 +45,11 @@ services:
     container_name: mosquitto
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["mqtt"]
     ports:
+      # Raw TCP, so Traefik's lan-only middleware does not apply. Firewall it at
+      # the host if the box is internet-facing.
       - "1883:1883"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro

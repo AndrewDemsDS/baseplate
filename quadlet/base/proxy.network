@@ -1,9 +1,0 @@
-[Unit]
-Description=baseplate network: proxy
-
-[Network]
-NetworkName=proxy
-Options=mtu=${PODMAN_NET_MTU}
-
-[Install]
-WantedBy=default.target

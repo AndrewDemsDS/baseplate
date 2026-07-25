@@ -1,6 +1,12 @@
 ---
 extends: default
 
+# traefik/dynamic.yml is generated from the .template by config-render and is
+# gitignored, so it exists locally but never in CI. Ignoring it keeps `just lint`
+# and the CI lint job reporting the same thing.
+ignore: |
+  traefik/dynamic.yml
+
 rules:
   line-length: disable
   comments: disable

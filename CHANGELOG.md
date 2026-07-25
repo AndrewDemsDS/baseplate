@@ -15,7 +15,19 @@ All notable changes are documented here. The format follows
   Traefik's default certificate. Removed Traefik's own ACME resolver.
 - Made LAN-only the default; Cloudflare Tunnel and WireGuard are now opt-in profiles.
 
+- Moved the Cloudflare Tunnel token out of `command:` into the environment; a
+  command line is readable by any user on the host via `docker inspect`.
+- Rendered `traefik/dynamic.yml` with `sed` instead of `envsubst`, dropping the
+  `apk add gettext` that made every `up` depend on a package mirror.
+- Deduplicated the *arr services onto YAML anchors, and gave every container log
+  rotation, so a single service can no longer fill the disk.
+- Gated Paperless and the Redis caches behind healthchecks rather than start
+  order, matching what Nextcloud already did.
+
 ### Added
+
+- Traefik routes for Bazarr, Tdarr and qBittorrent, which previously ran on the
+  proxy network with no way to reach them.
 
 - Beszel (hub + agent) and a Trivy vuln-scanner under the `monitoring` profile.
 - Gitea, Homarr, and Uptime Kuma under the `cloud` profiles.
@@ -30,4 +42,6 @@ All notable changes are documented here. The format follows
 
 ### Removed
 
+- Podman Quadlet support (`quadlet/`, the unit generator and installer, and the
+  CI drift check). The stack is Docker Compose only.
 - Standalone `arr-stack.yml` (folded into `media.yml`).

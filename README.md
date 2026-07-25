@@ -45,6 +45,11 @@ Tested on a Raspberry Pi 5 (Debian 13) and an x86 mini-PC/NAS. Any Docker host w
 - **Hardening**: `no-new-privileges` on every service, internal-only networks for
   databases, CPU/memory caps on the heavy containers, security headers on every
   route, and basic auth in front of admin UIs that lack their own login.
+- **Startup order** is enforced with healthchecks, not sleeps: anything with a
+  database or cache waits on `condition: service_healthy`, so an app never comes
+  up against a half-initialised backend.
+- **Logs are capped** at 10 MB × 3 files per container. Docker's default
+  `json-file` driver has no limit, which is how a chatty container fills a disk.
 
 ## Requirements
 
@@ -88,51 +93,6 @@ docker compose --profile nextcloud --profile media --profile monitoring up -d
 
 Routes for services you do not run stay in `dynamic.yml` and return 502 until the
 service is up. Comment out the ones you skip, or leave them.
-
-## Running under Podman (Quadlet)
-
-Compose is the source of truth, but the stack also ships as [Podman
-Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
-units in `quadlet/`, so systemd supervises the containers directly with no
-daemon and no compose runtime. This is what the author's own deployment runs.
-
-The units are generated, not hand-written: `just gen-quadlets` regenerates
-`quadlet/` from the compose files, and CI fails if the committed output has
-drifted. Change compose, regenerate, commit.
-
-```sh
-cp .env.example .env      # set BASEPLATE_DIR to this checkout's absolute path
-sudo ./scripts/install-quadlets.sh nextcloud media monitoring
-sudo systemctl start traefik.service
-```
-
-`base` (networks, Traefik, acme.sh, socket-proxy, Watchtower) is always
-installed; the arguments are profiles. Quadlet has no concept of profiles, so
-the equivalent is simply not installing units you do not want. Units are
-`WantedBy=default.target`, so they start on boot with no `restart:` policy
-needed.
-
-Things that differ from the compose path, and why:
-
-- **`config-render` has no unit.** It exists only because compose cannot run
-  a command before the stack starts; the installer renders
-  `traefik/dynamic.yml` itself.
-- **Bind mounts are absolute.** Quadlet rejects `./traefik`-style paths, so
-  repo-relative mounts are rewritten against `BASEPLATE_DIR`.
-- **MariaDB runs as `User=999`.** Its gosu privilege-drop hangs under rootful
-  Podman with crun, so the container never reports healthy and everything
-  waiting on it stalls. Docker and runc are unaffected.
-- **Startup ordering is real.** `depends_on: condition: service_healthy`
-  becomes `Notify=healthy` plus `TimeoutStartSec=300` on the dependency, so
-  Nextcloud genuinely waits for MariaDB instead of racing it.
-- **Installed units are `chmod 600`.** Substitution bakes `.env` values into
-  them, so they must not be world-readable.
-- **`PODMAN_NET_MTU`.** Leave at 1500 on a normal LAN. Behind PPPoE or a
-  tunnelled uplink, an oversized MTU makes image pulls hang rather than fail,
-  which is a genuinely confusing failure to debug. 1400 is the usual fix.
-
-Rootless is untested here. The units assume rootful Podman, which is what
-`PublishPort=80`/`443` and the socket mounts expect.
 
 ## App notes
 
@@ -203,8 +163,9 @@ CI runs on every PR and push to `main`:
 - yamllint, shellcheck, markdownlint
 - gitleaks secret scan
 
-A scheduled weekly Trivy image scan uploads results to the GitHub Security tab,
-and Dependabot keeps GitHub Actions and Docker base images current.
+A scheduled weekly Trivy image scan uploads results to the GitHub Security tab.
+Dependabot covers GitHub Actions; container images are kept current by Watchtower
+at runtime, since Dependabot cannot parse image tags out of Compose files.
 
 ## License
 

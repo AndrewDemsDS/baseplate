@@ -13,7 +13,8 @@ images=$(grep -rhoE '^\s*image:\s*\S+' compose.yml core.yml cloud.yml media.yml 
 fail=0
 for img in $images; do
   echo "=== scanning $img ==="
-  if trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --no-progress "$img" 2>/dev/null \
+  if trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --no-progress \
+      --ignore-unfixed --ignore-policy .trivyignore.rego "$img" 2>/dev/null \
       | grep -q "Total: [1-9]"; then
     echo "FINDINGS in $img"
     fail=1

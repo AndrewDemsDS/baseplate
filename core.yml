@@ -1,6 +1,15 @@
 # core — reverse proxy, TLS, Docker-API proxy, auto-updates.
 # These run by default (no profile). Remote-access services are opt-in.
 
+# Docker's default json-file driver grows without bound. Every service merges
+# this. Anchors do not cross `include:` boundaries, so each file declares its own.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 networks:
   proxy:
     name: proxy
@@ -19,18 +28,29 @@ services:
   # Renders traefik/dynamic.yml from the .template, substituting ${DOMAIN}.
   # Traefik's file provider does not expand env vars, so this runs first and
   # exits. The rendered dynamic.yml is gitignored.
+  #
+  # sed, not envsubst: envsubst means `apk add gettext`, which turns every
+  # `up -d` into a package fetch and fails on a host with no registry access.
+  # One variable does not justify that.
   config-render:
-    image: alpine:3
+    image: alpine:3.22
     container_name: config-render
     security_opt: ["no-new-privileges:true"]
+    read_only: true
+    cap_drop: ["ALL"]
+    <<: *logging
     environment:
       DOMAIN: "${DOMAIN:?set DOMAIN in .env}"
     volumes:
       - ./traefik:/work
-    command: >
-      sh -c "apk add --no-cache gettext >/dev/null 2>&1 &&
-             envsubst '$$DOMAIN' < /work/dynamic.yml.template > /work/dynamic.yml &&
-             echo rendered /work/dynamic.yml"
+    # List form on purpose: the string form goes through an extra shlex pass
+    # that eats the backslash escaping the `$` in the sed pattern.
+    command:
+      - sh
+      - -c
+      - |
+        sed "s|[$]{DOMAIN}|$$DOMAIN|g" /work/dynamic.yml.template > /work/dynamic.yml
+        echo "rendered /work/dynamic.yml for $$DOMAIN"
 
   # Reverse proxy. Routes come from the file provider (traefik/dynamic.yml);
   # there is no Docker label provider and no docker.sock mount.
@@ -39,6 +59,9 @@ services:
     container_name: traefik
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    <<: *logging
     depends_on:
       config-render:
         condition: service_completed_successfully
@@ -59,6 +82,7 @@ services:
     restart: unless-stopped
     command: daemon
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     environment:
       CF_Token: "${CF_DNS_API_TOKEN:?set CF_DNS_API_TOKEN in .env}"
     volumes:
@@ -69,11 +93,17 @@ services:
 
   # Least-privilege Docker API proxy. Watchtower talks to this, never the raw
   # root socket. Read-only socket mount, internal-only network.
+  #
+  # POST=1 is required — Watchtower has to stop, create and start containers to
+  # update them. That is enough to reach root on the host, so the proxy is not a
+  # sandbox; it is a smaller blast radius (no /exec, no /volumes, no /secrets)
+  # and, crucially, an internal network so nothing else can reach it.
   socket-proxy:
     image: lscr.io/linuxserver/socket-proxy:latest
     container_name: socket-proxy
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     networks: [socketproxy]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -92,13 +122,17 @@ services:
     container_name: watchtower
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     networks: [socketproxy]
     depends_on: [socket-proxy]
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
+    # nextcloud_cron shares the app volume with nextcloud and runs the same
+    # image — updating one without the other puts two versions on one data dir.
     command: >
       --schedule "0 0 4 * * *" --cleanup
-      --disable-containers nextcloud nextcloud_db vaultwarden gitea paperless paperless_db
+      --disable-containers nextcloud nextcloud_cron nextcloud_db vaultwarden
+      gitea paperless paperless_db
 
   # ── Remote access (opt-in) ──────────────────────────────────────────────────
 
@@ -110,9 +144,17 @@ services:
     container_name: cloudflared
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    read_only: true
+    cap_drop: ["ALL"]
+    <<: *logging
     profiles: ["tunnel"]
     networks: [proxy]
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+    # The token goes in the environment, not the command line: anything in
+    # `command:` is visible to every user on the host via `docker inspect`,
+    # `docker top` and /proc/<pid>/cmdline.
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARED_TUNNEL_TOKEN}"
+    command: tunnel --no-autoupdate run
 
   # WireGuard: a VPN back into the LAN. Reach every service by its LAN name
   # once connected, no public exposure.
@@ -122,13 +164,17 @@ services:
     container_name: wireguard
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["wireguard"]
-    cap_add: [NET_ADMIN, SYS_MODULE]
+    # No SYS_MODULE: WireGuard has been in-tree since 5.6, so the container has
+    # no module to load. Add it back (and drop the :ro below) only on a kernel
+    # older than that.
+    cap_add: [NET_ADMIN]
     ports:
       - "51820:51820/udp"
     volumes:
       - wireguard_config:/config
-      - /lib/modules:/lib/modules
+      - /lib/modules:/lib/modules:ro
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     environment:
@@ -149,6 +195,7 @@ services:
     read_only: true
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["ddns"]
     environment:
       CLOUDFLARE_API_TOKEN: "${DDNS_API_TOKEN}"

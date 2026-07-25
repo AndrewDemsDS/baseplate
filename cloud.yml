@@ -1,6 +1,13 @@
 # cloud — files, secrets, git, dashboard, status.
 # Routes for these live in traefik/dynamic.yml.template (LAN-only by default).
 
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 networks:
   proxy:
     name: proxy
@@ -26,13 +33,14 @@ services:
     container_name: nextcloud
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["nextcloud"]
     networks: [proxy, internal]
     depends_on:
       nextcloud_db:
         condition: service_healthy
       nextcloud_redis:
-        condition: service_started
+        condition: service_healthy
     cpus: 2.0
     volumes:
       - nextcloud_data:/var/www/html
@@ -54,6 +62,7 @@ services:
     container_name: nextcloud_cron
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["nextcloud"]
     networks: [internal]
     entrypoint: /cron.sh
@@ -61,7 +70,7 @@ services:
       nextcloud_db:
         condition: service_healthy
       nextcloud_redis:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - nextcloud_data:/var/www/html
 
@@ -73,6 +82,8 @@ services:
     container_name: nextcloud_db
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    stop_grace_period: 60s
     profiles: ["nextcloud"]
     networks: [internal]
     volumes:
@@ -92,18 +103,26 @@ services:
       start_period: 30s
 
   nextcloud_redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: nextcloud_redis
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["nextcloud"]
     networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   vaultwarden:
     image: vaultwarden/server:latest
     container_name: vaultwarden
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["vaultwarden"]
     networks: [proxy]
     volumes:
@@ -118,15 +137,17 @@ services:
     container_name: gitea
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["gitea"]
     networks: [proxy, internal]
     volumes:
       - gitea_data:/data
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
     ports:
+      # Raw TCP: Traefik never sees this, so the lan-only middleware does not
+      # apply. Firewall the port at the host if the box is internet-facing.
       - "2222:22"   # git over SSH
     environment:
+      TZ: "${TZ:-UTC}"
       USER_UID: "${PUID:-1000}"
       USER_GID: "${PGID:-1000}"
       GITEA__server__ROOT_URL: "https://git.${DOMAIN}/"
@@ -139,6 +160,7 @@ services:
     container_name: homarr
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["homarr"]
     networks: [proxy]
     volumes:
@@ -154,6 +176,7 @@ services:
     container_name: uptime-kuma
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["kuma"]
     networks: [proxy]
     volumes:
@@ -166,6 +189,8 @@ services:
     container_name: paperless_db
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    stop_grace_period: 60s
     profiles: ["paperless"]
     networks: [internal]
     volumes:
@@ -174,23 +199,41 @@ services:
       POSTGRES_DB: paperless
       POSTGRES_USER: paperless
       POSTGRES_PASSWORD: "${PAPERLESS_DB_PASSWORD}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperless -d paperless"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   paperless_redis:
-    image: redis:7
+    image: redis:7-alpine
     container_name: paperless_redis
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["paperless"]
     networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   paperless:
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     container_name: paperless
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    <<: *logging
     profiles: ["paperless"]
     networks: [proxy, internal]
-    depends_on: [paperless_db, paperless_redis]
+    depends_on:
+      paperless_db:
+        condition: service_healthy
+      paperless_redis:
+        condition: service_healthy
     volumes:
       - paperless_data:/usr/src/paperless/data
       - paperless_media:/usr/src/paperless/media

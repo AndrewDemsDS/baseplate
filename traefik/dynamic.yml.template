@@ -76,6 +76,25 @@ http:
       service: prowlarr
       middlewares: [lan-only, admin-auth, sec-headers]
       tls: {}
+    bazarr:
+      rule: "Host(`bazarr.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: bazarr
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    tdarr:
+      rule: "Host(`tdarr.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: tdarr
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    # qBittorrent has its own login, so no basic auth on top.
+    qbittorrent:
+      rule: "Host(`qbit.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: qbittorrent
+      middlewares: [lan-only, sec-headers]
+      tls: {}
     traefik:
       rule: "Host(`traefik.${DOMAIN}`)"
       entryPoints: [websecure]
@@ -117,6 +136,17 @@ http:
     prowlarr:
       loadBalancer:
         servers: [{ url: "http://prowlarr:9696" }]
+    bazarr:
+      loadBalancer:
+        servers: [{ url: "http://bazarr:6767" }]
+    tdarr:
+      loadBalancer:
+        servers: [{ url: "http://tdarr:8265" }]
+    # Under the `vpn` profile qbittorrent has no network stack of its own — it
+    # lives in gluetun's namespace, so the WebUI is reached via gluetun.
+    qbittorrent:
+      loadBalancer:
+        servers: [{ url: "http://gluetun:8080" }]
 
   middlewares:
     lan-only:

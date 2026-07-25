@@ -15,8 +15,8 @@ acme.json
 mosquitto/passwd
 
 # Runtime data / bind mounts.
-# Anchored to the repo root on purpose: an unanchored `media/` also matches
-# `quadlet/media/` and silently drops those units from commits.
+# Anchored to the repo root on purpose, so they do not also match nested
+# directories of the same name somewhere else in the tree.
 /data/
 /volumes/
 /hassio/
