@@ -19,6 +19,9 @@ Tested on a Raspberry Pi 5 (Debian 13) and an x86 mini-PC/NAS. Any Docker host w
 | Homarr | `homarr` | Start-page dashboard |
 | Uptime Kuma | `kuma` | Status/uptime monitoring |
 | Paperless-ngx (+ Postgres, Redis) | `paperless` | Document archive |
+| Miniflux (+ Postgres) | `miniflux` | RSS/Atom feed reader with a real API |
+| RSS-Bridge | `rssbridge` | HTML-to-RSS shim for sites without a feed |
+| news-digest (+ fb-scraper) | `digest` | One LLM-summarised email a day from your feeds |
 | Jellyfin + Sonarr/Radarr/Prowlarr/Bazarr/Tdarr | `media` | Media server + automation |
 | qBittorrent + Gluetun | `vpn` | Torrent client behind a VPN |
 | Home Assistant | `assistant` | Smart-home hub (host network) |
@@ -122,6 +125,47 @@ docker compose restart mosquitto
 
 **Beszel.** Start the hub, create the admin user, copy its public key into
 `BESZEL_KEY`, then recreate the agent so it trusts the hub.
+
+**News digest.** Miniflux collects the feeds; `news-digest` summarises the last 24
+hours into one email a day. The `digest` profile pulls Miniflux up with it.
+
+```sh
+docker compose --profile digest up -d
+# mint an API key once Miniflux is healthy, then put it in MINIFLUX_API_KEY
+docker compose exec miniflux sh -c 'wget -qO- --header="Content-Type: application/json" \
+  --post-data="{\"description\":\"digest\"}" \
+  --http-user=$ADMIN_USERNAME --http-password=$ADMIN_PASSWORD \
+  http://127.0.0.1:8080/v1/api-keys'
+```
+
+Add your feeds in the Miniflux UI at `reader.${DOMAIN}`. Set `DIGEST_REGION` to
+whatever the "national news" section should be called; everything is translated
+into `DIGEST_LANGUAGE` whatever the sources are in.
+
+`digest.${DOMAIN}` shows a status page with a **Run now** button. That button
+renders a fresh digest in the browser and deliberately does not email and does not
+mark entries read, so the scheduled run still goes out complete.
+
+Two things worth knowing before you rely on it:
+
+- **Verify a sender domain in Resend first.** Any `DIGEST_FROM` on an unverified
+  domain returns 403 on every send.
+- **Free LLM tiers cap tokens per minute far below the context window**, so the
+  digest is deliberately map-reduce: `GROQ_CHUNK_SIZE` items per call with
+  `GROQ_CHUNK_DELAY` seconds between. A whole day in one call is an instant 429.
+  Roughly 12k tokens per run at 75 items. `GROQ_BASE_URL` accepts any
+  OpenAI-compatible endpoint if you would rather run inference locally.
+
+Every failure degrades instead of cancelling the run: if the summariser is down you
+still get headlines with working links, and a red banner saying why.
+
+**fb-scraper (optional).** Reads PUBLIC Facebook groups logged out and feeds them
+into the digest. It never logs in and holds no credentials, so the worst case is a
+run that returns nothing. Set `FB_GROUPS` to comma-separated group slugs; leave it
+empty to disable. Note the ceiling: logged out, Facebook serves 3-5 posts per fetch
+and scrolling adds nothing, so it polls several times a day and dedupes. Expect it
+to break whenever Meta reshuffles its payloads. RSS-Bridge's FacebookBridge is not
+an alternative: upstream's own docs say groups "do not work at all".
 
 ## Remote access
 

@@ -25,6 +25,9 @@ volumes:
   paperless_data:
   paperless_media:
   paperless_db:
+  miniflux_db:
+  rssbridge_cache:
+  newsdigest_data:
 
 services:
 
@@ -246,3 +249,200 @@ services:
       PAPERLESS_DBPASS: "${PAPERLESS_DB_PASSWORD}"
       PAPERLESS_ADMIN_USER: "${PAPERLESS_ADMIN_USER:-admin}"
       PAPERLESS_ADMIN_PASSWORD: "${PAPERLESS_ADMIN_PASSWORD}"
+
+  # ── News digest: Miniflux + RSS-Bridge + an LLM summariser ──────────────────
+  # Pulls feeds into Miniflux, summarises the last 24h with any OpenAI-compatible
+  # API, and emails one digest a day. news-digest also serves a LAN-only status
+  # page whose "Run now" button renders a fresh digest in the browser without
+  # emailing and without marking entries read.
+
+  miniflux_db:
+    image: postgres:17-alpine
+    container_name: miniflux_db
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    stop_grace_period: 60s
+    # In both profiles: the digest cannot function without Miniflux, so enabling
+    # `digest` must bring the reader up too. `miniflux` alone is still a valid
+    # standalone feed reader.
+    profiles: ["miniflux", "digest"]
+    networks: [internal]
+    volumes:
+      - miniflux_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: miniflux
+      POSTGRES_USER: miniflux
+      POSTGRES_PASSWORD: "${MINIFLUX_DB_PASSWORD}"
+      # Postgres refuses to initdb into a non-empty dir; keep this path virgin.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miniflux -d miniflux"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  miniflux:
+    image: miniflux/miniflux:2.3.3
+    container_name: miniflux
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    profiles: ["miniflux", "digest"]
+    # proxy for the router and for outbound feed polling; internal for the DB.
+    networks: [proxy, internal]
+    depends_on:
+      miniflux_db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://miniflux:${MINIFLUX_DB_PASSWORD}@miniflux_db/miniflux?sslmode=disable"
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: "${MINIFLUX_ADMIN_USER:-admin}"
+      ADMIN_PASSWORD: "${MINIFLUX_ADMIN_PASSWORD}"
+      BASE_URL: "https://reader.${DOMAIN}/"
+      # Tuned for a small single-host box, not a server farm.
+      POLLING_FREQUENCY: "60"
+      POLLING_SCHEDULER: round_robin
+      BATCH_SIZE: "25"
+      WORKER_POOL_SIZE: "2"
+      CLEANUP_ARCHIVE_READ_DAYS: "30"
+      CLEANUP_ARCHIVE_UNREAD_DAYS: "60"
+      LOG_FORMAT: text
+      TZ: "${TZ:-UTC}"
+    healthcheck:
+      test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  rss-bridge:
+    # Upstream publishes no semver tags for this image, only `latest` and commit
+    # shas, so the pin has to be a sha tag. Re-pin manually for security fixes.
+    #
+    # FacebookBridge is deliberately absent from enabled_bridges: upstream's own
+    # docs say Facebook Groups "do not work at all" and the bridge is
+    # unmaintained. This container is here for its generic HTML-to-RSS shims.
+    image: rssbridge/rss-bridge:sha-fd17579
+    container_name: rss-bridge
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    profiles: ["rssbridge"]
+    networks: [proxy]
+    volumes:
+      - rssbridge_cache:/app/cache
+    environment:
+      # Keys are RSSBRIDGE_<section>_<key>. The section name is taken VERBATIM,
+      # so `system` must be lowercase; `System` silently creates an ignored
+      # section and no bridges load.
+      RSSBRIDGE_system_enabled_bridges: "CssSelectorBridge,XPathBridge,FeedMergeBridge,FeedReducerBridge,FilterBridge"
+      RSSBRIDGE_system_timezone: "${TZ:-UTC}"
+      RSSBRIDGE_system_enable_maintenance_mode: "false"
+      RSSBRIDGE_http_timeout: "20"
+      RSSBRIDGE_error_output: "http"
+      RSSBRIDGE_error_report_limit: "1"
+    healthcheck:
+      # The image ships neither wget nor curl; php is the only HTTP client.
+      test: ["CMD-SHELL", "php -r \"exit(@file_get_contents('http://127.0.0.1/')===false?1:0);\""]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  fb-scraper:
+    # Optional source: scrapes PUBLIC Facebook groups logged out and writes JSON
+    # for news-digest to read. Never logs in and holds no credentials, so the
+    # worst case is a run that returns nothing. Leave FB_GROUPS empty to disable.
+    #
+    # The Playwright image ships the browsers but NOT the `playwright` pip
+    # package. The one install goes to the data volume and is skipped on later
+    # starts, so a restart does not depend on PyPI being reachable.
+    image: mcr.microsoft.com/playwright/python:v1.61.0-noble
+    container_name: fb-scraper
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    init: true
+    profiles: ["digest"]
+    networks: [proxy]
+    volumes:
+      - ./scripts:/app:ro
+      - newsdigest_data:/data
+    command:
+      - bash
+      - -lc
+      - "python -c 'import playwright' 2>/dev/null || pip install -q --target /data/pylibs playwright==1.61.0; exec python -u /app/fb-scrape.py"
+    environment:
+      PYTHONPATH: /data/pylibs
+      PYTHONUNBUFFERED: "1"
+      STATE_DIR: /data
+      FB_GROUPS: "${FB_GROUPS:-}"
+      FB_RUNS_PER_DAY: "4"
+      FB_KEEP_HOURS: "72"
+      FB_LOCALE: en-GB
+      TZ: "${TZ:-UTC}"
+    shm_size: "256m"   # the default 64m is the classic headless-Chromium crash
+    mem_limit: 1g      # measured peak ~711 MB for a 3-group run
+    mem_reservation: 256m
+
+  news-digest:
+    # Stock upstream image + bind-mounted script, matching vuln-scanner. The
+    # script is standard library only: no pip at start, no Dockerfile, so the
+    # image stays visible to scripts/list-images.sh and the Trivy matrix.
+    image: python:3.13-alpine
+    container_name: news-digest
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    <<: *logging
+    profiles: ["digest"]
+    networks: [proxy]
+    depends_on:
+      miniflux:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/app:ro
+      - newsdigest_data:/data
+    working_dir: /app
+    command: ["python", "-u", "/app/news-digest.py"]
+    environment:
+      MINIFLUX_URL: http://miniflux:8080
+      MINIFLUX_API_KEY: "${MINIFLUX_API_KEY}"
+      # Any OpenAI-compatible endpoint works: Groq, OpenRouter, a local runtime.
+      GROQ_API_KEY: "${GROQ_API_KEY}"
+      GROQ_BASE_URL: "${GROQ_BASE_URL:-https://api.groq.com/openai/v1}"
+      GROQ_MODEL: "${GROQ_MODEL:-llama-3.3-70b-versatile}"
+      # Chunked because free tiers cap tokens per MINUTE well below the context
+      # window; a whole day of items in one call is an instant 429.
+      GROQ_CHUNK_SIZE: "20"
+      GROQ_CHUNK_DELAY: "20"
+      GROQ_MAX_ITEM_CHARS: "300"
+      RESEND_API_KEY: "${RESEND_API_KEY:-}"
+      DIGEST_FROM: "${DIGEST_FROM}"
+      DIGEST_TO: "${DIGEST_TO}"
+      DIGEST_SUBJECT_PREFIX: "${DIGEST_SUBJECT_PREFIX:-Daily Digest}"
+      # Names the "national news" section and steers the classifier.
+      DIGEST_REGION: "${DIGEST_REGION:-National}"
+      # Everything is translated into this language, whatever the source is in.
+      DIGEST_LANGUAGE: "${DIGEST_LANGUAGE:-English}"
+      DIGEST_HOUR: "${DIGEST_HOUR:-8}"
+      DIGEST_TZ: "${DIGEST_TZ:-UTC}"
+      DIGEST_LOOKBACK_HOURS: "${DIGEST_LOOKBACK_HOURS:-24}"
+      DIGEST_MAX_ITEMS: "120"
+      DIGEST_DROP_CATEGORIES: "SKIP,SPORT,ENTERTAINMENT"
+      DIGEST_CATCHUP_MINUTES: "180"
+      DIGEST_MARK_READ: "true"
+      RUN_NOW_COOLDOWN: "120"
+      STATE_DIR: /data
+      MANUAL_NOTES_FILE: /data/manual.md
+      LISTEN_PORT: "8080"
+      TZ: "${TZ:-UTC}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=5)\""]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    mem_limit: 192m

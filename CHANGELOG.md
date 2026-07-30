@@ -26,6 +26,10 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- A news digest pipeline: Miniflux (+ Postgres) under the `miniflux` profile,
+  RSS-Bridge under `rssbridge`, and `news-digest` + an optional `fb-scraper`
+  under `digest`. One LLM-summarised email a day, plus a LAN-only status page
+  whose "Run now" button renders a digest without emailing or marking read.
 - Traefik routes for Bazarr, Tdarr and qBittorrent, which previously ran on the
   proxy network with no way to reach them.
 

@@ -45,6 +45,29 @@ http:
       service: uptime-kuma
       middlewares: [lan-only, sec-headers]
       tls: {}
+    # Miniflux has its own login, so no admin-auth on top of it.
+    miniflux:
+      rule: "Host(`reader.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: miniflux
+      middlewares: [lan-only, sec-headers]
+      tls: {}
+    # RSS-Bridge is an unauthenticated server-side URL fetcher, i.e. an SSRF
+    # primitive. lan-only alone would leave it open to every device on the LAN.
+    rss-bridge:
+      rule: "Host(`bridge.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: rss-bridge
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
+    # The digest page has no login of its own and its "Run now" button spends
+    # real API quota, so it needs an auth gate and not just a network gate.
+    news-digest:
+      rule: "Host(`digest.${DOMAIN}`)"
+      entryPoints: [websecure]
+      service: news-digest
+      middlewares: [lan-only, admin-auth, sec-headers]
+      tls: {}
     jellyfin:
       rule: "Host(`media.${DOMAIN}`)"
       entryPoints: [websecure]
@@ -121,6 +144,15 @@ http:
     uptime-kuma:
       loadBalancer:
         servers: [{ url: "http://uptime-kuma:3001" }]
+    miniflux:
+      loadBalancer:
+        servers: [{ url: "http://miniflux:8080" }]
+    rss-bridge:
+      loadBalancer:
+        servers: [{ url: "http://rss-bridge:80" }]
+    news-digest:
+      loadBalancer:
+        servers: [{ url: "http://news-digest:8080" }]
     jellyfin:
       loadBalancer:
         servers: [{ url: "http://jellyfin:8096" }]

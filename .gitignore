@@ -23,3 +23,8 @@ mosquitto/passwd
 /media/
 *.log
 .DS_Store
+
+# Python bytecode / tool caches from scripts/
+__pycache__/
+*.pyc
+.ruff_cache/
