@@ -54,7 +54,9 @@ class Config:
     digest_tz: str
     lookback_hours: int
     max_items: int
+    max_community: int
     drop_categories: set
+    community_drop: set
     catchup_minutes: int
     mark_read: bool
     run_now_cooldown: int
@@ -95,11 +97,17 @@ def load_config():
         digest_tz=os.environ.get("DIGEST_TZ", "UTC"),
         lookback_hours=_int("DIGEST_LOOKBACK_HOURS", 24),
         max_items=_int("DIGEST_MAX_ITEMS", 120),
+        max_community=_int("DIGEST_MAX_COMMUNITY", 60),
         drop_categories={
             c.strip().upper()
             for c in os.environ.get(
                 "DIGEST_DROP_CATEGORIES", "SKIP,SPORT,ENTERTAINMENT"
             ).split(",")
+            if c.strip()
+        },
+        community_drop={
+            c.strip().upper()
+            for c in os.environ.get("DIGEST_COMMUNITY_DROP", "ADVERT").split(",")
             if c.strip()
         },
         catchup_minutes=_int("DIGEST_CATCHUP_MINUTES", 180),
@@ -194,6 +202,8 @@ class Item:
     text: str
     published_at: int
     entry_id: int = 0
+    # "news" gets ranked and merged; "community" is rendered verbatim.
+    kind: str = "news"
 
 
 @dataclass
@@ -300,7 +310,9 @@ def fetch_miniflux(cfg, since_ts, warnings):
         return []
     items = []
     for e in body.get("entries", []):
-        feed = (e.get("feed") or {}).get("title") or "unknown"
+        feed_obj = e.get("feed") or {}
+        feed = feed_obj.get("title") or "unknown"
+        category = ((feed_obj.get("category") or {}).get("title") or "").lower()
         items.append(
             Item(
                 idx=0,
@@ -312,6 +324,7 @@ def fetch_miniflux(cfg, since_ts, warnings):
                 ),
                 published_at=_epoch(e.get("published_at")),
                 entry_id=e.get("id") or 0,
+                kind="community" if "community" in category else "news",
             )
         )
     log(f"  miniflux: {len(items)} entries (of {body.get('total', '?')} total)")
@@ -367,6 +380,7 @@ def fetch_fb_json(cfg, since_ts, warnings):
                 idx=0,
                 source=f"FB/{p.get('group', 'group')}"
                 + (f" · {author}" if author else ""),
+                kind="community",
                 title=truncate(p.get("text") or "", 120),
                 url=p.get("url") or "",
                 text=truncate(p.get("text") or "", cfg.groq_max_item_chars),
@@ -398,6 +412,7 @@ def fetch_manual(cfg, since_ts, warnings):
             Item(
                 idx=0,
                 source="Noticeboard (manual)",
+                kind="community",
                 title=truncate(body, 120),
                 url=m.group(1) if m else "",
                 text=truncate(body, cfg.groq_max_item_chars),
@@ -449,12 +464,16 @@ def groq_chat(cfg, messages, json_mode=False, max_tokens=1200, temperature=0.2):
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
+    # retries=4: container DNS resolution fails transiently (URLError errno -3,
+    # "Try again"), and each lost chunk silently degrades ~20 items to raw
+    # untranslated headlines. The default 2 was not enough to ride it out.
     status, resp, err = http_json(
         "POST",
         f"{cfg.groq_base}/chat/completions",
         {"Authorization": f"Bearer {cfg.groq_key}"},
         body,
         timeout=120,
+        retries=4,
     )
     if err or not isinstance(resp, dict):
         return None, err or "bad Groq response", {}
@@ -471,14 +490,26 @@ def summarize_chunk(cfg, items, warnings, usage_acc):
     single-shot batch of a day's news is ~21,000. The context window is
     a red herring here; TPM is the binding constraint.
     """
+    # Number the chunk 1..N locally and translate back afterwards. Given a
+    # chunk whose real indices start anywhere but 1, the model renumbers from 1
+    # anyway -- and the out-of-range guard below then discards the whole chunk
+    # silently. Local numbering makes the guard a real hallucination check
+    # instead of a chunk-dropper.
+    local = {n: it.idx for n, it in enumerate(items, 1)}
     listing = "\n".join(
-        f"[{it.idx}] {it.source} | {it.title} | {it.text}" for it in items
+        f"[{n}] {it.source} | {it.title} | {it.text}"
+        for n, it in enumerate(items, 1)
     )
     prompt = (
         "Below are news items, possibly in several languages. For EACH item output "
         "exactly one line, no preamble, no markdown:\n"
         f"<index> | <CATEGORY> | <one-sentence {cfg.language} summary, max 25 words>\n"
-        "CATEGORY is one of: NATIONAL, LOCAL, WORLD, BUSINESS, SPORT, ENTERTAINMENT, SKIP.\n"
+        "CATEGORY is one of: NATIONAL, LOCAL, WORLD, BUSINESS, SPORT, "
+        "ENTERTAINMENT, ADVERT, SKIP.\n"
+        "Use ADVERT for anything selling or promoting something: items for sale, "
+        "business or service promotion, price lists, discount offers, job ads, "
+        "'contact us on <phone>', rentals, and giveaways run by a business. "
+        "A community group post announcing a public event is NOT an ADVERT.\n"
         f"Use NATIONAL for {cfg.region} news, LOCAL for a specific municipality, "
         "neighbourhood or community, and for community-group posts.\n"
         "Use SKIP for advertorials, horoscopes, celebrity gossip, listicles and reposts.\n"
@@ -498,7 +529,6 @@ def summarize_chunk(cfg, items, warnings, usage_acc):
         warnings.append(f"Summary chunk failed ({err}); those items are shown raw")
         return []
 
-    valid = {it.idx for it in items}
     lines = []
     for raw in (out or "").splitlines():
         parts = [p.strip() for p in raw.split("|", 2)]
@@ -507,10 +537,12 @@ def summarize_chunk(cfg, items, warnings, usage_acc):
         m = re.search(r"\d+", parts[0])
         if not m:
             continue
-        idx = int(m.group())
-        if idx not in valid:
+        n = int(m.group())
+        if n not in local:
             continue  # hallucinated index: drop rather than render a bad link
-        lines.append(Line(idx=idx, category=parts[1].upper()[:20], summary=parts[2]))
+        lines.append(
+            Line(idx=local[n], category=parts[1].upper()[:20], summary=parts[2])
+        )
     return lines
 
 
@@ -812,7 +844,13 @@ def run(cfg, *, mark_read_entries, deliver, trigger):
                 f"Source {src.__name__} crashed: {type(exc).__name__}: {exc}"
             )
 
-    items = dedupe(items)[: cfg.max_items]
+    # Cap the two halves independently. A single shared cap silently starves
+    # whichever source list is appended last (community), because truncation
+    # takes the tail.
+    deduped = dedupe(items)
+    news = [i for i in deduped if i.kind == "news"][: cfg.max_items]
+    community = [i for i in deduped if i.kind == "community"][: cfg.max_community]
+    items = news + community
     for n, it in enumerate(items, 1):
         it.idx = n
     by_idx = {it.idx: it for it in items}
@@ -835,18 +873,52 @@ def run(cfg, *, mark_read_entries, deliver, trigger):
     elif items:
         warnings.append("No Groq key: showing raw headlines, untranslated")
 
-    kept = [ln for ln in lines if ln.category not in cfg.drop_categories]
+    community_idx = {i.idx for i in community}
+    # The SKIP/SPORT filter is an editorial judgement for news. Community posts
+    # are a noticeboard, so the only thing worth dropping there is an empty
+    # summary -- the model labels ordinary group chatter SKIP because it reads
+    # like the reposts and listicles the prompt tells it to discard.
+    # Community keeps everything with a real summary EXCEPT adverts -- the
+    # noticeboard is meant to be complete, but group feeds carry a lot of
+    # for-sale and business-promo posts that are pure noise.
+    kept = [
+        ln
+        for ln in lines
+        if (
+            ln.idx in community_idx
+            and ln.summary.strip()
+            and ln.category not in cfg.community_drop
+        )
+        or (ln.idx not in community_idx and ln.category not in cfg.drop_categories)
+    ]
     dropped = len(lines) - len(kept)
 
-    # REDUCE
-    if kept:
-        sections = build_digest(cfg, kept, warnings, usage) or sections_from_lines(
-            cfg, kept
-        )
-    elif items:
-        sections = sections_raw(items)  # raw mode
+    # Only news is ranked and merged. Community posts are a noticeboard: the
+    # point is completeness, not editorial judgement, and when they went
+    # through REDUCE alongside news they lost on "importance" every time and
+    # vanished from the digest entirely.
+    news_lines = [ln for ln in kept if ln.idx not in community_idx]
+    community_lines = [ln for ln in kept if ln.idx in community_idx]
+
+    # REDUCE (news only)
+    if news_lines:
+        sections = build_digest(
+            cfg, news_lines, warnings, usage
+        ) or sections_from_lines(cfg, news_lines)
+    elif news:
+        sections = sections_raw(news)  # raw mode
     else:
         sections = []
+
+    if community_lines:
+        sections = sections + [
+            {
+                "name": "Community noticeboard",
+                "bullets": [
+                    {"text": ln.summary, "indices": [ln.idx]} for ln in community_lines
+                ],
+            }
+        ]
 
     tz = ZoneInfo(cfg.digest_tz)
     now_local = datetime.now(tz)

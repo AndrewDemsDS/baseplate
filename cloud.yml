@@ -380,12 +380,21 @@ services:
       PYTHONUNBUFFERED: "1"
       STATE_DIR: /data
       FB_GROUPS: "${FB_GROUPS:-}"
-      FB_RUNS_PER_DAY: "4"
+      FB_RUNS_PER_DAY: "2"
+      FB_SCROLLS: "4"
       FB_KEEP_HOURS: "72"
       FB_LOCALE: en-GB
+      # Optional Playwright storage_state. Absent means logged out, which only
+      # sees public groups. Mount your own read-only to reach private ones:
+      #   - /path/to/secrets:/secrets:ro
+      FB_STATE_FILE: /secrets/fb_state.json
       TZ: "${TZ:-UTC}"
     shm_size: "256m"   # the default 64m is the classic headless-Chromium crash
-    mem_limit: 1g      # measured peak ~711 MB for a 3-group run
+    # ~711 MB measured logged out; an authenticated feed is heavier and OOM
+    # here does not kill the container, it wedges it at 0% CPU. Never run a
+    # second scrape via `exec` while the loop is running: two Chromium trees
+    # in one cgroup is what triggers it.
+    mem_limit: 1600m
     mem_reservation: 256m
 
   news-digest:

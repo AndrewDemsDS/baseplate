@@ -50,6 +50,16 @@ SETTLE_MS = int(env("FB_SETTLE_MS", "4000"))
 LOCALE = env("FB_LOCALE", "en-GB")
 RETRY_BACKOFF = [30, 300, 1800]
 
+# Optional Playwright storage_state. Mount it read-only; it holds session
+# cookies, so treat it exactly like a password even though it is not one.
+# Produced by, on a desktop:
+#   playwright open --save-storage=fb_state.json https://www.facebook.com/
+# Without it the scraper runs logged out, which only ever sees PUBLIC groups
+# (and most groups are private). With it, scrolling also works, so a fetch is
+# not stuck at the 3-5 post ceiling.
+STATE_FILE = env("FB_STATE_FILE", "/secrets/fb_state.json")
+SCROLLS = int(env("FB_SCROLLS", "4"))
+
 DIGEST_JSON = os.path.join(STATE_DIR, "fb_digest.json")
 STATUS_JSON = os.path.join(STATE_DIR, "fb_scrape_status.json")
 
@@ -142,13 +152,32 @@ def harvest(blobs, group):
 BLOCKED = {"image", "media", "font", "imageset"}
 
 
-def scrape_group(context, group):
+def scrape_group(context, group, authed):
     page = context.new_page()
     # Images and fonts are ~90% of the bytes and none of the data.
     page.route(
         "**/*",
         lambda r: r.abort() if r.request.resource_type in BLOCKED else r.continue_(),
     )
+
+    # Only the first few posts are baked into the inline <script> payloads.
+    # Everything further down the feed arrives as GraphQL XHR responses, so
+    # scrolling alone grows the blob count without yielding posts. Capture the
+    # response bodies too. Bodies are read lazily here and the handler swallows
+    # everything: a failed read must never take the run down.
+    xhr = []
+
+    def on_response(resp):
+        try:
+            if "/api/graphql" in resp.url:
+                xhr.append(resp.text())
+        except Exception:
+            pass
+
+    page.on("response", on_response)
+    # A hard ceiling on every operation, not just goto: logged in, the feed
+    # keeps issuing requests, and one wedged group must not stall the whole run.
+    page.set_default_timeout(NAV_TIMEOUT)
     try:
         url = f"https://www.facebook.com/groups/{group}"
         resp = page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
@@ -157,13 +186,43 @@ def scrape_group(context, group):
 
         final = page.url
         if "/login" in final or "login.php" in final:
-            raise RuntimeError(f"login wall (redirected to {final})")
+            if authed:
+                # Distinguish "never had a session" from "session went stale",
+                # because the fix is different and only one needs a human.
+                raise RuntimeError(
+                    "session expired or invalid: re-run the one-time "
+                    "`playwright open --save-storage=...` login and replace "
+                    f"{STATE_FILE}"
+                )
+            raise RuntimeError(f"login wall, group is private (redirected to {final})")
 
-        blobs = page.eval_on_selector_all(
-            'script[type="application/json"]', "els => els.map(e => e.textContent)"
+        blobs = []
+        # Logged out, scrolling adds literally nothing (3-5 posts is the hard
+        # ceiling). Logged in it does, so harvest after each scroll and merge:
+        # the JSON payloads for earlier posts get dropped from the DOM as the
+        # virtualised feed advances.
+        for n in range(SCROLLS + 1 if authed else 1):
+            if n:
+                page.mouse.wheel(0, 3000)
+                page.wait_for_timeout(1500)
+            blobs.extend(
+                b
+                for b in page.eval_on_selector_all(
+                    'script[type="application/json"]',
+                    "els => els.map(e => e.textContent)",
+                )
+                if b
+            )
+
+        # GraphQL responses are newline-delimited JSON, not one object.
+        for body in xhr:
+            blobs.extend(ln for ln in (body or "").splitlines() if ln.startswith("{"))
+
+        posts = harvest(blobs, group)
+        log(
+            f"  {group}: http={status} blobs={len(blobs)} "
+            f"xhr={len(xhr)} posts={len(posts)}"
         )
-        posts = harvest([b for b in blobs if b], group)
-        log(f"  {group}: http={status} blobs={len(blobs)} posts={len(posts)}")
         return posts
     finally:
         page.close()
@@ -181,15 +240,21 @@ def scrape_all(groups):
             ]
         )
         try:
+            authed = os.path.exists(STATE_FILE)
+            log(
+                f"  session: {'authenticated' if authed else 'logged out'}"
+                + ("" if authed else f" (no {STATE_FILE}); private groups will fail")
+            )
             context = browser.new_context(
                 user_agent=UA,
                 locale=LOCALE,
                 viewport={"width": 1366, "height": 900},
                 extra_http_headers={"Accept-Language": f"{LOCALE},en;q=0.8"},
+                storage_state=STATE_FILE if authed else None,
             )
             for g in groups:
                 try:
-                    posts.extend(scrape_group(context, g))
+                    posts.extend(scrape_group(context, g, authed))
                 except Exception as exc:  # one bad group != bad run
                     log(f"  {g}: FAILED {type(exc).__name__}: {exc}")
         finally:

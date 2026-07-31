@@ -159,13 +159,30 @@ Two things worth knowing before you rely on it:
 Every failure degrades instead of cancelling the run: if the summariser is down you
 still get headlines with working links, and a red banner saying why.
 
-**fb-scraper (optional).** Reads PUBLIC Facebook groups logged out and feeds them
-into the digest. It never logs in and holds no credentials, so the worst case is a
-run that returns nothing. Set `FB_GROUPS` to comma-separated group slugs; leave it
-empty to disable. Note the ceiling: logged out, Facebook serves 3-5 posts per fetch
-and scrolling adds nothing, so it polls several times a day and dedupes. Expect it
-to break whenever Meta reshuffles its payloads. RSS-Bridge's FacebookBridge is not
-an alternative: upstream's own docs say groups "do not work at all".
+**fb-scraper (optional).** Feeds Facebook group posts into the digest. Set
+`FB_GROUPS` to comma-separated group slugs or ids; leave it empty to disable.
+
+Logged out it holds no credentials at all, but it can then only read **public**
+groups, and Facebook serves 3-5 posts per fetch with scrolling disabled. In
+practice most groups are private, so logged out it will often return nothing.
+
+To reach private groups, save a session once on a desktop and mount it read-only:
+
+```sh
+playwright open --save-storage=fb_state.json https://www.facebook.com/
+# log in yourself, then close the window; the session is written on close
+```
+
+Point `FB_STATE_FILE` at it and add `- /path/to/secrets:/secrets:ro`. Scrolling
+then works, so a fetch is no longer capped. That file holds session cookies:
+**treat it as credential-equivalent**, and redo the step after a password change
+or a 2FA re-prompt. The scraper distinguishes "no session" from "session expired"
+in its logs so you know which happened.
+
+Expect breakage whenever Meta reshuffles its payloads: the failure mode is zero
+posts and no exception, so the scraper never overwrites its last good file and
+alerts on `consecutive_failures`. RSS-Bridge's FacebookBridge is not an
+alternative here: upstream's own docs say groups "do not work at all".
 
 ## Remote access
 
